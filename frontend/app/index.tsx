@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,6 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Audio } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -54,63 +53,18 @@ export default function ScannerScreen() {
   const [showResultModal, setShowResultModal] = useState(false);
   const [showListModal, setShowListModal] = useState(false);
   const [packages, setPackages] = useState<PackageRecord[]>([]);
-  const [scanMode, setScanMode] = useState<'barcode' | 'manual'>('barcode');
-  
-  const successSoundRef = useRef<Audio.Sound | null>(null);
-  const errorSoundRef = useRef<Audio.Sound | null>(null);
+  const [scanMode, setScanMode] = useState<'barcode' | 'manual'>('manual'); // Default to manual for web
+  const [showPermissionScreen, setShowPermissionScreen] = useState(true);
 
-  // Load sounds on mount
-  useEffect(() => {
-    loadSounds();
-    return () => {
-      unloadSounds();
-    };
-  }, []);
-
-  const loadSounds = async () => {
-    try {
-      // Use system-like sounds with Audio API
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-      });
-    } catch (error) {
-      console.log('Error loading audio:', error);
+  const playSuccessFeedback = () => {
+    if (Platform.OS !== 'web') {
+      Vibration.vibrate(100);
     }
   };
 
-  const unloadSounds = async () => {
-    try {
-      if (successSoundRef.current) {
-        await successSoundRef.current.unloadAsync();
-      }
-      if (errorSoundRef.current) {
-        await errorSoundRef.current.unloadAsync();
-      }
-    } catch (error) {
-      console.log('Error unloading sounds:', error);
-    }
-  };
-
-  const playSuccessSound = async () => {
-    try {
-      // Vibration feedback
-      if (Platform.OS !== 'web') {
-        Vibration.vibrate(100);
-      }
-    } catch (error) {
-      console.log('Error playing success sound:', error);
-    }
-  };
-
-  const playErrorSound = async () => {
-    try {
-      // Vibration feedback for error (longer pattern)
-      if (Platform.OS !== 'web') {
-        Vibration.vibrate([0, 100, 100, 100]);
-      }
-    } catch (error) {
-      console.log('Error playing error sound:', error);
+  const playErrorFeedback = () => {
+    if (Platform.OS !== 'web') {
+      Vibration.vibrate([0, 100, 100, 100]);
     }
   };
 
@@ -121,6 +75,7 @@ export default function ScannerScreen() {
     setScannedData(data);
     setManualName(data);
     setShowConfirmModal(true);
+    playSuccessFeedback();
   };
 
   const processName = async (name: string) => {
@@ -144,15 +99,16 @@ export default function ScannerScreen() {
       const result: ScanResponse = await response.json();
 
       if (response.ok && result.success) {
-        await playSuccessSound();
+        playSuccessFeedback();
         setLastResult(result);
         setShowResultModal(true);
+        setManualName(''); // Reset for next entry
       } else {
-        await playErrorSound();
+        playErrorFeedback();
         Alert.alert('Erreur', result.message || 'Une erreur est survenue');
       }
     } catch (error) {
-      await playErrorSound();
+      playErrorFeedback();
       console.error('Error processing scan:', error);
       Alert.alert('Erreur', 'Impossible de contacter le serveur');
     } finally {
@@ -184,7 +140,18 @@ export default function ScannerScreen() {
     setShowListModal(true);
   };
 
-  // Permission handling
+  const handleRequestPermission = async () => {
+    await requestPermission();
+    setShowPermissionScreen(false);
+    setScanMode('barcode');
+  };
+
+  const handleManualMode = () => {
+    setShowPermissionScreen(false);
+    setScanMode('manual');
+  };
+
+  // Loading state
   if (!permission) {
     return (
       <SafeAreaView style={styles.container}>
@@ -196,7 +163,8 @@ export default function ScannerScreen() {
     );
   }
 
-  if (!permission.granted) {
+  // Show permission request screen only if needed and user hasn't bypassed it
+  if (!permission.granted && showPermissionScreen && scanMode === 'barcode') {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.centerContent}>
@@ -205,14 +173,21 @@ export default function ScannerScreen() {
           <Text style={styles.permissionText}>
             L'application a besoin d'accéder à la caméra pour scanner les colis.
           </Text>
-          <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
+          <TouchableOpacity style={styles.permissionButton} onPress={handleRequestPermission}>
             <Text style={styles.permissionButtonText}>Autoriser la Caméra</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.permissionButton, { backgroundColor: '#34C759', marginTop: 12 }]} 
+            onPress={handleManualMode}
+          >
+            <Text style={styles.permissionButtonText}>Mode Manuel</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
+  // Main app UI
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
@@ -227,7 +202,14 @@ export default function ScannerScreen() {
       <View style={styles.modeSelector}>
         <TouchableOpacity
           style={[styles.modeButton, scanMode === 'barcode' && styles.modeButtonActive]}
-          onPress={() => setScanMode('barcode')}
+          onPress={() => {
+            if (permission.granted) {
+              setScanMode('barcode');
+            } else {
+              setShowPermissionScreen(true);
+              setScanMode('barcode');
+            }
+          }}
         >
           <Ionicons name="barcode-outline" size={20} color={scanMode === 'barcode' ? '#FFF' : '#666'} />
           <Text style={[styles.modeButtonText, scanMode === 'barcode' && styles.modeButtonTextActive]}>
@@ -246,7 +228,7 @@ export default function ScannerScreen() {
       </View>
 
       {/* Scanner View */}
-      {scanMode === 'barcode' ? (
+      {scanMode === 'barcode' && permission.granted ? (
         <View style={styles.scannerContainer}>
           <CameraView
             style={styles.camera}
@@ -370,8 +352,8 @@ export default function ScannerScreen() {
               {lastResult?.package_count} colis
             </Text>
             <TouchableOpacity style={styles.resultButton} onPress={resetScanner}>
-              <Ionicons name="scan" size={24} color="#FFF" />
-              <Text style={styles.resultButtonText}>Scanner Suivant</Text>
+              <Ionicons name="add-circle" size={24} color="#FFF" />
+              <Text style={styles.resultButtonText}>Ajouter un autre</Text>
             </TouchableOpacity>
           </View>
         </View>
