@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   ScrollView,
   KeyboardAvoidingView,
+  Image,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
@@ -29,6 +30,13 @@ interface ScanResponse {
   record_id?: string;
 }
 
+interface OCRResponse {
+  success: boolean;
+  name?: string;
+  raw_text?: string;
+  message: string;
+}
+
 interface PackageRecord {
   id: string;
   name: string;
@@ -37,24 +45,21 @@ interface PackageRecord {
   note?: string;
 }
 
-interface BarcodeScanResult {
-  type: string;
-  data: string;
-}
-
 export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
-  const [scanned, setScanned] = useState(false);
-  const [scannedData, setScannedData] = useState('');
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [manualName, setManualName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [lastResult, setLastResult] = useState<ScanResponse | null>(null);
   const [showResultModal, setShowResultModal] = useState(false);
   const [showListModal, setShowListModal] = useState(false);
   const [packages, setPackages] = useState<PackageRecord[]>([]);
-  const [scanMode, setScanMode] = useState<'barcode' | 'manual'>('manual'); // Default to manual for web
+  const [scanMode, setScanMode] = useState<'photo' | 'manual'>('manual');
   const [showPermissionScreen, setShowPermissionScreen] = useState(true);
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [isProcessingOCR, setIsProcessingOCR] = useState(false);
+  
+  const cameraRef = useRef<any>(null);
 
   const playSuccessFeedback = () => {
     if (Platform.OS !== 'web') {
@@ -68,14 +73,56 @@ export default function ScannerScreen() {
     }
   };
 
-  const handleBarCodeScanned = ({ type, data }: BarcodeScanResult) => {
-    if (scanned) return;
+  const takePicture = async () => {
+    if (!cameraRef.current) return;
     
-    setScanned(true);
-    setScannedData(data);
-    setManualName(data);
-    setShowConfirmModal(true);
-    playSuccessFeedback();
+    try {
+      setIsProcessingOCR(true);
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.7,
+      });
+      
+      if (photo.base64) {
+        setCapturedImage(`data:image/jpeg;base64,${photo.base64}`);
+        
+        // Send to OCR
+        const response = await fetch(`${BACKEND_URL}/api/ocr`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ image_base64: photo.base64 }),
+        });
+        
+        const result: OCRResponse = await response.json();
+        
+        if (result.success && result.name) {
+          playSuccessFeedback();
+          setManualName(result.name);
+          setShowConfirmModal(true);
+        } else {
+          playErrorFeedback();
+          Alert.alert(
+            'Nom non trouvé',
+            'Impossible de trouver le nom sur l\'étiquette. Voulez-vous l\'entrer manuellement ?',
+            [
+              { text: 'Réessayer', onPress: () => setCapturedImage(null) },
+              { text: 'Manuel', onPress: () => {
+                setCapturedImage(null);
+                setScanMode('manual');
+              }},
+            ]
+          );
+        }
+      }
+    } catch (error) {
+      console.error('Error taking picture:', error);
+      playErrorFeedback();
+      Alert.alert('Erreur', 'Impossible de prendre la photo');
+    } finally {
+      setIsProcessingOCR(false);
+    }
   };
 
   const processName = async (name: string) => {
@@ -102,7 +149,8 @@ export default function ScannerScreen() {
         playSuccessFeedback();
         setLastResult(result);
         setShowResultModal(true);
-        setManualName(''); // Reset for next entry
+        setManualName('');
+        setCapturedImage(null);
       } else {
         playErrorFeedback();
         Alert.alert('Erreur', result.message || 'Une erreur est survenue');
@@ -117,11 +165,10 @@ export default function ScannerScreen() {
   };
 
   const resetScanner = () => {
-    setScanned(false);
-    setScannedData('');
     setManualName('');
     setShowResultModal(false);
     setLastResult(null);
+    setCapturedImage(null);
   };
 
   const fetchPackages = async () => {
@@ -143,7 +190,7 @@ export default function ScannerScreen() {
   const handleRequestPermission = async () => {
     await requestPermission();
     setShowPermissionScreen(false);
-    setScanMode('barcode');
+    setScanMode('photo');
   };
 
   const handleManualMode = () => {
@@ -164,14 +211,14 @@ export default function ScannerScreen() {
   }
 
   // Show permission request screen only if needed and user hasn't bypassed it
-  if (!permission.granted && showPermissionScreen && scanMode === 'barcode') {
+  if (!permission.granted && showPermissionScreen && scanMode === 'photo') {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.centerContent}>
           <Ionicons name="camera-outline" size={80} color="#666" />
           <Text style={styles.permissionTitle}>Accès Caméra Requis</Text>
           <Text style={styles.permissionText}>
-            L'application a besoin d'accéder à la caméra pour scanner les colis.
+            L'application a besoin d'accéder à la caméra pour photographier les étiquettes.
           </Text>
           <TouchableOpacity style={styles.permissionButton} onPress={handleRequestPermission}>
             <Text style={styles.permissionButtonText}>Autoriser la Caméra</Text>
@@ -201,19 +248,19 @@ export default function ScannerScreen() {
       {/* Mode Selector */}
       <View style={styles.modeSelector}>
         <TouchableOpacity
-          style={[styles.modeButton, scanMode === 'barcode' && styles.modeButtonActive]}
+          style={[styles.modeButton, scanMode === 'photo' && styles.modeButtonActive]}
           onPress={() => {
             if (permission.granted) {
-              setScanMode('barcode');
+              setScanMode('photo');
             } else {
               setShowPermissionScreen(true);
-              setScanMode('barcode');
+              setScanMode('photo');
             }
           }}
         >
-          <Ionicons name="barcode-outline" size={20} color={scanMode === 'barcode' ? '#FFF' : '#666'} />
-          <Text style={[styles.modeButtonText, scanMode === 'barcode' && styles.modeButtonTextActive]}>
-            Scanner
+          <Ionicons name="camera-outline" size={20} color={scanMode === 'photo' ? '#FFF' : '#666'} />
+          <Text style={[styles.modeButtonText, scanMode === 'photo' && styles.modeButtonTextActive]}>
+            Photo
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -227,33 +274,49 @@ export default function ScannerScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Scanner View */}
-      {scanMode === 'barcode' && permission.granted ? (
+      {/* Photo Mode */}
+      {scanMode === 'photo' && permission.granted ? (
         <View style={styles.scannerContainer}>
-          <CameraView
-            style={styles.camera}
-            facing="back"
-            barcodeScannerSettings={{
-              barcodeTypes: ['qr', 'ean13', 'ean8', 'code128', 'code39', 'code93', 'datamatrix', 'pdf417'],
-            }}
-            onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-          />
-          <View style={styles.scanOverlay}>
-            <View style={styles.scanFrame}>
-              <View style={[styles.scanCorner, styles.topLeft]} />
-              <View style={[styles.scanCorner, styles.topRight]} />
-              <View style={[styles.scanCorner, styles.bottomLeft]} />
-              <View style={[styles.scanCorner, styles.bottomRight]} />
+          {capturedImage ? (
+            <View style={styles.previewContainer}>
+              <Image source={{ uri: capturedImage }} style={styles.previewImage} />
+              {isProcessingOCR && (
+                <View style={styles.ocrOverlay}>
+                  <ActivityIndicator size="large" color="#FFF" />
+                  <Text style={styles.ocrText}>Analyse de l'étiquette...</Text>
+                </View>
+              )}
             </View>
-            <Text style={styles.scanHint}>
-              {scanned ? 'Scan effectué' : 'Placez le code-barres dans le cadre'}
-            </Text>
-          </View>
-          {scanned && (
-            <TouchableOpacity style={styles.rescanButton} onPress={resetScanner}>
-              <Ionicons name="refresh" size={24} color="#FFF" />
-              <Text style={styles.rescanButtonText}>Nouveau Scan</Text>
-            </TouchableOpacity>
+          ) : (
+            <>
+              <CameraView
+                ref={cameraRef}
+                style={styles.camera}
+                facing="back"
+              />
+              <View style={styles.scanOverlay}>
+                <View style={styles.labelFrame}>
+                  <View style={[styles.scanCorner, styles.topLeft]} />
+                  <View style={[styles.scanCorner, styles.topRight]} />
+                  <View style={[styles.scanCorner, styles.bottomLeft]} />
+                  <View style={[styles.scanCorner, styles.bottomRight]} />
+                </View>
+                <Text style={styles.scanHint}>
+                  Cadrez le NOM du destinataire
+                </Text>
+              </View>
+              <TouchableOpacity 
+                style={styles.captureButton} 
+                onPress={takePicture}
+                disabled={isProcessingOCR}
+              >
+                {isProcessingOCR ? (
+                  <ActivityIndicator color="#FFF" size="large" />
+                ) : (
+                  <Ionicons name="camera" size={40} color="#FFF" />
+                )}
+              </TouchableOpacity>
+            </>
           )}
         </View>
       ) : (
@@ -295,9 +358,11 @@ export default function ScannerScreen() {
       <Modal visible={showConfirmModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Confirmer le Nom</Text>
-            <Text style={styles.modalSubtitle}>Données scannées:</Text>
-            <Text style={styles.scannedDataText}>{scannedData}</Text>
+            <View style={styles.successBadge}>
+              <Ionicons name="checkmark-circle" size={40} color="#34C759" />
+            </View>
+            <Text style={styles.modalTitle}>Nom Trouvé !</Text>
+            <Text style={styles.modalSubtitle}>Confirmez ou modifiez :</Text>
             <TextInput
               style={styles.modalInput}
               placeholder="Nom du destinataire"
@@ -312,7 +377,8 @@ export default function ScannerScreen() {
                 style={[styles.modalButton, styles.cancelButton]}
                 onPress={() => {
                   setShowConfirmModal(false);
-                  resetScanner();
+                  setCapturedImage(null);
+                  setManualName('');
                 }}
               >
                 <Text style={styles.cancelButtonText}>Annuler</Text>
@@ -400,7 +466,7 @@ export default function ScannerScreen() {
       {isLoading && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Traitement...</Text>
+          <Text style={styles.loadingText}>Enregistrement...</Text>
         </View>
       )}
     </SafeAreaView>
@@ -473,10 +539,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  scanFrame: {
-    width: 280,
-    height: 200,
+  labelFrame: {
+    width: 320,
+    height: 180,
     position: 'relative',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 8,
   },
   scanCorner: {
     position: 'absolute',
@@ -485,54 +554,75 @@ const styles = StyleSheet.create({
     borderColor: '#00FF00',
   },
   topLeft: {
-    top: 0,
-    left: 0,
+    top: -2,
+    left: -2,
     borderTopWidth: 4,
     borderLeftWidth: 4,
+    borderTopLeftRadius: 8,
   },
   topRight: {
-    top: 0,
-    right: 0,
+    top: -2,
+    right: -2,
     borderTopWidth: 4,
     borderRightWidth: 4,
+    borderTopRightRadius: 8,
   },
   bottomLeft: {
-    bottom: 0,
-    left: 0,
+    bottom: -2,
+    left: -2,
     borderBottomWidth: 4,
     borderLeftWidth: 4,
+    borderBottomLeftRadius: 8,
   },
   bottomRight: {
-    bottom: 0,
-    right: 0,
+    bottom: -2,
+    right: -2,
     borderBottomWidth: 4,
     borderRightWidth: 4,
+    borderBottomRightRadius: 8,
   },
   scanHint: {
     marginTop: 20,
     fontSize: 16,
     color: '#FFF',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
     borderRadius: 8,
-  },
-  rescanButton: {
-    position: 'absolute',
-    bottom: 30,
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 30,
-    gap: 8,
-  },
-  rescanButtonText: {
-    color: '#FFF',
-    fontSize: 16,
     fontWeight: '600',
+  },
+  captureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: '#FFF',
+  },
+  previewContainer: {
+    flex: 1,
+    position: 'relative',
+  },
+  previewImage: {
+    flex: 1,
+    resizeMode: 'contain',
+  },
+  ocrOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  ocrText: {
+    color: '#FFF',
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 16,
   },
   manualContainer: {
     flex: 1,
@@ -591,26 +681,22 @@ const styles = StyleSheet.create({
     width: '85%',
     maxWidth: 400,
   },
+  successBadge: {
+    alignItems: 'center',
+    marginBottom: 8,
+  },
   modalTitle: {
     fontSize: 22,
     fontWeight: 'bold',
     color: '#333',
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 8,
   },
   modalSubtitle: {
     fontSize: 14,
     color: '#666',
-    marginBottom: 4,
-  },
-  scannedDataText: {
-    fontSize: 12,
-    color: '#999',
-    backgroundColor: '#F5F5F5',
-    padding: 8,
-    borderRadius: 6,
-    marginBottom: 16,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginBottom: 12,
+    textAlign: 'center',
   },
   modalInput: {
     backgroundColor: '#F5F5F5',

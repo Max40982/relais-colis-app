@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime
 import aiohttp
 import re
+import asyncio
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -24,6 +25,9 @@ db = client[os.environ['DB_NAME']]
 AIRTABLE_API_KEY = os.environ.get('AIRTABLE_API_KEY', '')
 AIRTABLE_BASE_ID = os.environ.get('AIRTABLE_BASE_ID', '')
 AIRTABLE_TABLE_ID = os.environ.get('AIRTABLE_TABLE_ID', '')
+
+# Emergent LLM Key for OCR
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 
 # Create the main app without a prefix
 app = FastAPI()
@@ -41,6 +45,15 @@ logger = logging.getLogger(__name__)
 # Define Models
 class ScanRequest(BaseModel):
     name: str
+
+class OCRRequest(BaseModel):
+    image_base64: str
+
+class OCRResponse(BaseModel):
+    success: bool
+    name: Optional[str] = None
+    raw_text: Optional[str] = None
+    message: str
     
 class ScanResponse(BaseModel):
     success: bool
@@ -157,6 +170,79 @@ async def health_check():
         status="ok",
         airtable_configured=bool(AIRTABLE_API_KEY and AIRTABLE_BASE_ID and AIRTABLE_TABLE_ID)
     )
+
+@api_router.post("/ocr", response_model=OCRResponse)
+async def extract_name_from_image(request: OCRRequest):
+    """Extract recipient name from package label image using AI Vision"""
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+        
+        if not EMERGENT_LLM_KEY:
+            raise HTTPException(status_code=500, detail="OCR non configuré")
+        
+        # Clean base64 string (remove data:image prefix if present)
+        image_base64 = request.image_base64
+        if ',' in image_base64:
+            image_base64 = image_base64.split(',')[1]
+        
+        # Initialize chat with vision model
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"ocr-{uuid.uuid4()}",
+            system_message="""Tu es un assistant spécialisé dans l'extraction de noms de destinataires sur les étiquettes de colis.
+            
+Analyse l'image de l'étiquette et extrait UNIQUEMENT le nom du destinataire (la personne qui doit recevoir le colis).
+            
+Règles:
+- Retourne UNIQUEMENT le nom et prénom, rien d'autre
+- Format: "NOM Prénom" ou "Prénom NOM" selon ce qui est écrit
+- Ignore les adresses, codes postaux, numéros de téléphone, codes-barres
+- Si tu ne trouves pas de nom clair, retourne "INCONNU"
+- Ne retourne jamais d'explication, juste le nom"""
+        ).with_model("openai", "gpt-4o")
+        
+        # Create image content
+        image_content = ImageContent(image_base64=image_base64)
+        
+        # Send message with image
+        user_message = UserMessage(
+            text="Extrait le nom du destinataire de cette étiquette de colis. Retourne UNIQUEMENT le nom, rien d'autre.",
+            image_contents=[image_content]
+        )
+        
+        response = await chat.send_message(user_message)
+        
+        extracted_name = response.strip()
+        
+        # Validate the extracted name
+        if not extracted_name or extracted_name.upper() == "INCONNU" or len(extracted_name) < 2:
+            return OCRResponse(
+                success=False,
+                name=None,
+                raw_text=extracted_name,
+                message="Impossible de trouver le nom du destinataire sur l'étiquette"
+            )
+        
+        # Clean up the name (remove quotes, extra spaces)
+        extracted_name = extracted_name.strip('"\'').strip()
+        
+        logger.info(f"OCR extracted name: {extracted_name}")
+        
+        return OCRResponse(
+            success=True,
+            name=extracted_name,
+            raw_text=extracted_name,
+            message=f"Nom extrait: {extracted_name}"
+        )
+        
+    except Exception as e:
+        logger.error(f"OCR error: {e}")
+        return OCRResponse(
+            success=False,
+            name=None,
+            raw_text=None,
+            message=f"Erreur OCR: {str(e)}"
+        )
 
 @api_router.post("/scan", response_model=ScanResponse)
 async def process_scan(request: ScanRequest):
