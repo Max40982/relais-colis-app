@@ -207,7 +207,7 @@ Règles:
         # Send message with image
         user_message = UserMessage(
             text="Extrait le nom du destinataire de cette étiquette de colis. Retourne UNIQUEMENT le nom, rien d'autre.",
-            image_contents=[image_content]
+            file_contents=[image_content]
         )
         
         response = await chat.send_message(user_message)

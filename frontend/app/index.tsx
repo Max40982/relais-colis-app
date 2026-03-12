@@ -74,17 +74,27 @@ export default function ScannerScreen() {
   };
 
   const takePicture = async () => {
-    if (!cameraRef.current) return;
+    if (!cameraRef.current) {
+      Alert.alert('Erreur', 'Caméra non disponible');
+      return;
+    }
     
     try {
       setIsProcessingOCR(true);
+      console.log('Taking picture...');
+      
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
-        quality: 0.7,
+        quality: 0.5,
+        skipProcessing: true,
       });
+      
+      console.log('Photo taken, base64 length:', photo.base64?.length);
       
       if (photo.base64) {
         setCapturedImage(`data:image/jpeg;base64,${photo.base64}`);
+        
+        console.log('Sending to OCR...');
         
         // Send to OCR
         const response = await fetch(`${BACKEND_URL}/api/ocr`, {
@@ -95,7 +105,10 @@ export default function ScannerScreen() {
           body: JSON.stringify({ image_base64: photo.base64 }),
         });
         
+        console.log('OCR response status:', response.status);
+        
         const result: OCRResponse = await response.json();
+        console.log('OCR result:', result);
         
         if (result.success && result.name) {
           playSuccessFeedback();
@@ -105,7 +118,7 @@ export default function ScannerScreen() {
           playErrorFeedback();
           Alert.alert(
             'Nom non trouvé',
-            'Impossible de trouver le nom sur l\'étiquette. Voulez-vous l\'entrer manuellement ?',
+            result.message || 'Impossible de trouver le nom sur l\'étiquette.',
             [
               { text: 'Réessayer', onPress: () => setCapturedImage(null) },
               { text: 'Manuel', onPress: () => {
@@ -115,11 +128,14 @@ export default function ScannerScreen() {
             ]
           );
         }
+      } else {
+        throw new Error('Pas de données base64 dans la photo');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error taking picture:', error);
       playErrorFeedback();
-      Alert.alert('Erreur', 'Impossible de prendre la photo');
+      Alert.alert('Erreur', `Impossible de prendre la photo: ${error.message || error}`);
+      setCapturedImage(null);
     } finally {
       setIsProcessingOCR(false);
     }
