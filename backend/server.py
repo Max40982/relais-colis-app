@@ -107,10 +107,11 @@ async def airtable_request(method: str, endpoint: str, data: dict = None):
                 return await response.json()
 
 async def find_recipient_by_name(name: str):
-    """Find a recipient by name in Airtable"""
-    # URL encode the filter formula
+    """Find a recipient by name in Airtable (case insensitive)"""
     import urllib.parse
-    filter_formula = f"{{Nom}}='{name}'"
+    
+    # Use LOWER() for case-insensitive search
+    filter_formula = f"LOWER({{Nom}})=LOWER('{name}')"
     encoded_filter = urllib.parse.quote(filter_formula)
     
     try:
@@ -123,12 +124,45 @@ async def find_recipient_by_name(name: str):
         logger.error(f"Error finding recipient: {e}")
         return None
 
+def format_name(name: str) -> str:
+    """Format name as 'NOM Prénom' - surname uppercase, firstname capitalized"""
+    parts = name.strip().split()
+    if len(parts) == 0:
+        return name
+    elif len(parts) == 1:
+        # Just one word - make it uppercase (assume it's the surname)
+        return parts[0].upper()
+    else:
+        # Multiple words - assume first word is surname, rest is firstname
+        # Or if first word is lowercase and second is uppercase, swap them
+        # Common formats: "DUPONT Jean" or "Jean DUPONT" or "Dupont Jean"
+        
+        # Check if any word is already fully uppercase (likely the surname)
+        uppercase_idx = -1
+        for i, part in enumerate(parts):
+            if part.isupper() and len(part) > 1:
+                uppercase_idx = i
+                break
+        
+        if uppercase_idx >= 0:
+            # Found an uppercase word - that's the surname
+            surname = parts[uppercase_idx].upper()
+            firstname_parts = [p.capitalize() for j, p in enumerate(parts) if j != uppercase_idx]
+            firstname = ' '.join(firstname_parts)
+            return f"{surname} {firstname}".strip()
+        else:
+            # No uppercase word - assume first word is surname
+            surname = parts[0].upper()
+            firstname = ' '.join([p.capitalize() for p in parts[1:]])
+            return f"{surname} {firstname}".strip()
+
 async def create_recipient(name: str):
     """Create a new recipient in Airtable"""
+    formatted_name = format_name(name)
     data = {
         "records": [{
             "fields": {
-                "Nom": name,
+                "Nom": formatted_name,
                 "Numéro": 1,
                 "Statuts": "En attente"
             }
@@ -137,16 +171,24 @@ async def create_recipient(name: str):
     result = await airtable_request("POST", "", data)
     return result.get("records", [{}])[0]
 
-async def update_recipient_count(record_id: str, current_count: int):
-    """Update the package count for an existing recipient"""
+async def update_recipient_count(record_id: str, current_note: str):
+    """Update the package count in Note column for an existing recipient"""
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_ID}/{record_id}"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
+    
+    # Calculate new note value (increment counter)
+    if current_note and current_note.strip().isdigit():
+        new_count = int(current_note.strip()) + 1
+    else:
+        # If note is empty or not a number, this is the 2nd package
+        new_count = 2
+    
     data = {
         "fields": {
-            "Numéro": current_count + 1
+            "Note": str(new_count)
         }
     }
     
@@ -156,7 +198,7 @@ async def update_recipient_count(record_id: str, current_count: int):
                 error_text = await response.text()
                 logger.error(f"Airtable PATCH error: {error_text}")
                 raise HTTPException(status_code=response.status, detail=f"Airtable error: {error_text}")
-            return await response.json()
+            return await response.json(), new_count
 
 # API Routes
 @api_router.get("/")
@@ -252,29 +294,29 @@ async def process_scan(request: ScanRequest):
     if not name:
         raise HTTPException(status_code=400, detail="Le nom ne peut pas être vide")
     
-    # Normalize the name (capitalize first letter of each word)
-    name = name.title()
+    # Format the name (NOM Prénom)
+    formatted_name = format_name(name)
     
-    logger.info(f"Processing scan for: {name}")
+    logger.info(f"Processing scan for: {formatted_name} (original: {name})")
     
     try:
-        # Check if recipient exists
+        # Check if recipient exists (case insensitive search)
         existing_record = await find_recipient_by_name(name)
         
         if existing_record:
-            # Update existing recipient
+            # Update existing recipient - increment Note column
             record_id = existing_record["id"]
-            current_count = existing_record.get("fields", {}).get("Numéro", 0)
+            existing_name = existing_record.get("fields", {}).get("Nom", formatted_name)
+            current_note = existing_record.get("fields", {}).get("Note", "")
             
-            await update_recipient_count(record_id, current_count)
-            new_count = current_count + 1
+            result, new_count = await update_recipient_count(record_id, current_note)
             
-            logger.info(f"Updated {name}: {current_count} -> {new_count} colis")
+            logger.info(f"Updated {existing_name}: Note -> {new_count} colis")
             
             return ScanResponse(
                 success=True,
-                message=f"Mis à jour: {new_count} colis pour {name}",
-                name=name,
+                message=f"Mis à jour: {new_count} colis pour {existing_name}",
+                name=existing_name,
                 is_new=False,
                 package_count=new_count,
                 record_id=record_id
@@ -283,13 +325,14 @@ async def process_scan(request: ScanRequest):
             # Create new recipient
             new_record = await create_recipient(name)
             record_id = new_record.get("id")
+            created_name = new_record.get("fields", {}).get("Nom", formatted_name)
             
-            logger.info(f"Created new recipient: {name}")
+            logger.info(f"Created new recipient: {created_name}")
             
             return ScanResponse(
                 success=True,
-                message=f"Nouveau destinataire: {name} (1 colis)",
-                name=name,
+                message=f"Nouveau destinataire: {created_name} (1 colis)",
+                name=created_name,
                 is_new=True,
                 package_count=1,
                 record_id=record_id
