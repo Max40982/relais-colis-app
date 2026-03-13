@@ -351,26 +351,19 @@ async def extract_name_from_image(request: OCRRequest):
             image_base64 = image_base64.split(',')[1]
         
         # Initialize chat with vision model
+        # Use gpt-4o for vision (fast enough with short prompt)
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"ocr-{uuid.uuid4()}",
-            system_message="""Tu extrais le nom du destinataire d'étiquettes de colis.
-
-RÈGLES IMPORTANTES:
-- Le NOM DE FAMILLE doit être en MAJUSCULES
-- Le prénom doit avoir juste la première lettre en majuscule
-- Format: "NOM Prénom" (ex: DUPONT Jean, MARTIN Sophie)
-- Sur les étiquettes, le nom de famille est souvent celui écrit en majuscules ou en premier
-- Retourne UNIQUEMENT le nom formaté, rien d'autre
-- Si pas de nom trouvé, retourne INCONNU"""
+            system_message="Extrait NOM Prénom. NOM en MAJUSCULES. Ex: DUPONT Jean"
         ).with_model("openai", "gpt-4o")
         
         # Create image content
         image_content = ImageContent(image_base64=image_base64)
         
-        # Send message with image
+        # Ultra short prompt
         user_message = UserMessage(
-            text="Extrait le nom du destinataire. Réponds UNIQUEMENT avec le format 'NOM Prénom' (nom de famille en MAJUSCULES, prénom normal). Exemple: DUPONT Jean",
+            text="Nom?",
             file_contents=[image_content]
         )
         

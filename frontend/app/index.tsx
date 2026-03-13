@@ -83,7 +83,7 @@ export default function ScannerScreen() {
     try {
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
-        quality: 0.15, // Ultra low for speed
+        quality: 0.1, // Minimum quality for max speed
         skipProcessing: true,
       });
       
