@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,9 +12,9 @@ import {
   ActivityIndicator,
   ScrollView,
   KeyboardAvoidingView,
-  Image,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Audio } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -53,86 +53,152 @@ export default function ScannerScreen() {
   const [showResultModal, setShowResultModal] = useState(false);
   const [showListModal, setShowListModal] = useState(false);
   const [packages, setPackages] = useState<PackageRecord[]>([]);
-  const [scanMode, setScanMode] = useState<'photo' | 'manual'>('photo');
+  const [scanMode, setScanMode] = useState<'auto' | 'manual'>('auto');
   const [showPermissionScreen, setShowPermissionScreen] = useState(true);
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [isProcessingOCR, setIsProcessingOCR] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanStatus, setScanStatus] = useState('Recherche du nom...');
+  const [detectedName, setDetectedName] = useState<string | null>(null);
   
   const cameraRef = useRef<any>(null);
+  const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isProcessingRef = useRef(false);
+  const soundRef = useRef<Audio.Sound | null>(null);
 
-  const playSuccessFeedback = () => {
-    if (Platform.OS !== 'web') {
-      Vibration.vibrate(100);
+  // Load success sound
+  useEffect(() => {
+    loadSound();
+    return () => {
+      unloadSound();
+      stopAutoScan();
+    };
+  }, []);
+
+  const loadSound = async () => {
+    try {
+      await Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+      });
+    } catch (error) {
+      console.log('Error setting audio mode:', error);
     }
   };
 
-  const playErrorFeedback = () => {
-    if (Platform.OS !== 'web') {
-      Vibration.vibrate([0, 100, 100, 100]);
+  const unloadSound = async () => {
+    if (soundRef.current) {
+      await soundRef.current.unloadAsync();
     }
   };
 
-  const takePicture = async () => {
-    if (!cameraRef.current) {
-      Alert.alert('Erreur', 'Caméra non disponible');
-      return;
+  const playSuccessSound = async () => {
+    try {
+      // Play system sound via vibration pattern
+      if (Platform.OS !== 'web') {
+        Vibration.vibrate([0, 50, 50, 50, 50, 50]);
+      }
+      
+      // Try to play a beep sound
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: 'https://www.soundjay.com/buttons/beep-01a.mp3' },
+        { shouldPlay: true, volume: 1.0 }
+      );
+      soundRef.current = sound;
+      
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          sound.unloadAsync();
+        }
+      });
+    } catch (error) {
+      // Fallback to vibration only
+      if (Platform.OS !== 'web') {
+        Vibration.vibrate([0, 100, 50, 100]);
+      }
     }
+  };
+
+  const playErrorSound = async () => {
+    if (Platform.OS !== 'web') {
+      Vibration.vibrate([0, 200, 100, 200]);
+    }
+  };
+
+  // Auto scan function
+  const autoScan = useCallback(async () => {
+    if (!cameraRef.current || isProcessingRef.current || !isScanning) return;
+    
+    isProcessingRef.current = true;
     
     try {
-      setIsProcessingOCR(true);
-      
-      // Take photo with lower quality for faster upload
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
-        quality: 0.3, // Lower quality = faster
+        quality: 0.2,
         skipProcessing: true,
         exif: false,
       });
       
       if (photo.base64) {
-        // Don't show preview image - go straight to OCR for speed
-        // Send to OCR immediately
         const response = await fetch(`${BACKEND_URL}/api/ocr`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ image_base64: photo.base64 }),
         });
         
         const result: OCRResponse = await response.json();
         
         if (result.success && result.name) {
-          playSuccessFeedback();
+          // Name found! Stop scanning and show confirmation
+          stopAutoScan();
+          setDetectedName(result.name);
           setManualName(result.name);
+          await playSuccessSound();
           setShowConfirmModal(true);
-        } else {
-          playErrorFeedback();
-          Alert.alert(
-            'Nom non trouvé',
-            result.message || 'Impossible de trouver le nom sur l\'étiquette.',
-            [
-              { text: 'Réessayer', onPress: () => setCapturedImage(null) },
-              { text: 'Manuel', onPress: () => {
-                setCapturedImage(null);
-                setScanMode('manual');
-              }},
-            ]
-          );
         }
-      } else {
-        throw new Error('Pas de données base64 dans la photo');
       }
-    } catch (error: any) {
-      console.error('Error taking picture:', error);
-      playErrorFeedback();
-      Alert.alert('Erreur', `Impossible de prendre la photo: ${error.message || error}`);
-      setCapturedImage(null);
+    } catch (error) {
+      console.log('Auto scan error:', error);
     } finally {
-      setIsProcessingOCR(false);
+      isProcessingRef.current = false;
     }
-  };
+  }, [isScanning]);
+
+  const startAutoScan = useCallback(() => {
+    if (scanIntervalRef.current) return;
+    
+    setIsScanning(true);
+    setScanStatus('Recherche du nom...');
+    setDetectedName(null);
+    
+    // Start scanning every 1.5 seconds
+    scanIntervalRef.current = setInterval(() => {
+      autoScan();
+    }, 1500);
+    
+    // Also do immediate scan
+    setTimeout(autoScan, 500);
+  }, [autoScan]);
+
+  const stopAutoScan = useCallback(() => {
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+    setIsScanning(false);
+    isProcessingRef.current = false;
+  }, []);
+
+  // Start auto scan when camera is ready and mode is auto
+  useEffect(() => {
+    if (permission?.granted && scanMode === 'auto' && !showConfirmModal && !showResultModal) {
+      const timer = setTimeout(() => {
+        startAutoScan();
+      }, 1000);
+      return () => clearTimeout(timer);
+    } else {
+      stopAutoScan();
+    }
+  }, [permission?.granted, scanMode, showConfirmModal, showResultModal]);
 
   const processName = async (name: string) => {
     if (!name.trim()) {
@@ -146,27 +212,24 @@ export default function ScannerScreen() {
     try {
       const response = await fetch(`${BACKEND_URL}/api/scan`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim() }),
       });
 
       const result: ScanResponse = await response.json();
 
       if (response.ok && result.success) {
-        playSuccessFeedback();
+        await playSuccessSound();
         setLastResult(result);
         setShowResultModal(true);
         setManualName('');
-        setCapturedImage(null);
+        setDetectedName(null);
       } else {
-        playErrorFeedback();
+        await playErrorSound();
         Alert.alert('Erreur', result.message || 'Une erreur est survenue');
       }
     } catch (error) {
-      playErrorFeedback();
-      console.error('Error processing scan:', error);
+      await playErrorSound();
       Alert.alert('Erreur', 'Impossible de contacter le serveur');
     } finally {
       setIsLoading(false);
@@ -177,7 +240,8 @@ export default function ScannerScreen() {
     setManualName('');
     setShowResultModal(false);
     setLastResult(null);
-    setCapturedImage(null);
+    setDetectedName(null);
+    // Auto scan will restart via useEffect
   };
 
   const fetchPackages = async () => {
@@ -186,12 +250,12 @@ export default function ScannerScreen() {
       const data: PackageRecord[] = await response.json();
       setPackages(data);
     } catch (error) {
-      console.error('Error fetching packages:', error);
       Alert.alert('Erreur', 'Impossible de charger la liste');
     }
   };
 
   const openPackageList = async () => {
+    stopAutoScan();
     await fetchPackages();
     setShowListModal(true);
   };
@@ -199,12 +263,12 @@ export default function ScannerScreen() {
   const handleRequestPermission = async () => {
     await requestPermission();
     setShowPermissionScreen(false);
-    setScanMode('photo');
   };
 
   const handleManualMode = () => {
     setShowPermissionScreen(false);
     setScanMode('manual');
+    stopAutoScan();
   };
 
   // Loading state
@@ -219,21 +283,21 @@ export default function ScannerScreen() {
     );
   }
 
-  // Show permission request screen only if needed and user hasn't bypassed it
-  if (!permission.granted && showPermissionScreen && scanMode === 'photo') {
+  // Permission screen
+  if (!permission.granted && showPermissionScreen) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.centerContent}>
-          <Ionicons name="camera-outline" size={80} color="#666" />
-          <Text style={styles.permissionTitle}>Accès Caméra Requis</Text>
+          <Ionicons name="scan-outline" size={80} color="#007AFF" />
+          <Text style={styles.permissionTitle}>Scan Automatique</Text>
           <Text style={styles.permissionText}>
-            L'application a besoin d'accéder à la caméra pour photographier les étiquettes.
+            Autorisez la caméra pour scanner automatiquement les étiquettes.
           </Text>
           <TouchableOpacity style={styles.permissionButton} onPress={handleRequestPermission}>
-            <Text style={styles.permissionButtonText}>Autoriser la Caméra</Text>
+            <Text style={styles.permissionButtonText}>Autoriser</Text>
           </TouchableOpacity>
           <TouchableOpacity 
-            style={[styles.permissionButton, { backgroundColor: '#34C759', marginTop: 12 }]} 
+            style={[styles.permissionButton, { backgroundColor: '#666', marginTop: 12 }]} 
             onPress={handleManualMode}
           >
             <Text style={styles.permissionButtonText}>Mode Manuel</Text>
@@ -243,90 +307,77 @@ export default function ScannerScreen() {
     );
   }
 
-  // Main app UI
+  // Main UI
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>📦 Relais Colis</Text>
-        <TouchableOpacity style={styles.listButton} onPress={openPackageList}>
-          <Ionicons name="list" size={24} color="#FFF" />
-        </TouchableOpacity>
+        <View style={styles.headerButtons}>
+          <TouchableOpacity 
+            style={styles.headerButton} 
+            onPress={() => {
+              if (scanMode === 'auto') {
+                stopAutoScan();
+                setScanMode('manual');
+              } else {
+                setScanMode('auto');
+              }
+            }}
+          >
+            <Ionicons 
+              name={scanMode === 'auto' ? 'scan' : 'pencil'} 
+              size={22} 
+              color="#FFF" 
+            />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.headerButton} onPress={openPackageList}>
+            <Ionicons name="list" size={22} color="#FFF" />
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Mode Selector */}
-      <View style={styles.modeSelector}>
-        <TouchableOpacity
-          style={[styles.modeButton, scanMode === 'photo' && styles.modeButtonActive]}
-          onPress={() => {
-            if (permission.granted) {
-              setScanMode('photo');
-            } else {
-              setShowPermissionScreen(true);
-              setScanMode('photo');
-            }
-          }}
-        >
-          <Ionicons name="camera-outline" size={20} color={scanMode === 'photo' ? '#FFF' : '#666'} />
-          <Text style={[styles.modeButtonText, scanMode === 'photo' && styles.modeButtonTextActive]}>
-            Photo
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.modeButton, scanMode === 'manual' && styles.modeButtonActive]}
-          onPress={() => setScanMode('manual')}
-        >
-          <Ionicons name="pencil-outline" size={20} color={scanMode === 'manual' ? '#FFF' : '#666'} />
-          <Text style={[styles.modeButtonText, scanMode === 'manual' && styles.modeButtonTextActive]}>
-            Manuel
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Photo Mode */}
-      {scanMode === 'photo' && permission.granted ? (
+      {/* Camera / Manual Mode */}
+      {scanMode === 'auto' && permission.granted ? (
         <View style={styles.scannerContainer}>
-          {capturedImage ? (
-            <View style={styles.previewContainer}>
-              <Image source={{ uri: capturedImage }} style={styles.previewImage} />
-              {isProcessingOCR && (
-                <View style={styles.ocrOverlay}>
-                  <ActivityIndicator size="large" color="#FFF" />
-                  <Text style={styles.ocrText}>Analyse de l'étiquette...</Text>
+          <CameraView
+            ref={cameraRef}
+            style={styles.camera}
+            facing="back"
+          />
+          <View style={styles.scanOverlay}>
+            {/* Scan frame */}
+            <View style={styles.scanFrame}>
+              <View style={[styles.scanCorner, styles.topLeft]} />
+              <View style={[styles.scanCorner, styles.topRight]} />
+              <View style={[styles.scanCorner, styles.bottomLeft]} />
+              <View style={[styles.scanCorner, styles.bottomRight]} />
+              
+              {/* Scanning indicator */}
+              {isScanning && (
+                <View style={styles.scanningIndicator}>
+                  <ActivityIndicator size="small" color="#00FF00" />
                 </View>
               )}
             </View>
-          ) : (
-            <>
-              <CameraView
-                ref={cameraRef}
-                style={styles.camera}
-                facing="back"
-              />
-              <View style={styles.scanOverlay}>
-                <View style={styles.labelFrame}>
-                  <View style={[styles.scanCorner, styles.topLeft]} />
-                  <View style={[styles.scanCorner, styles.topRight]} />
-                  <View style={[styles.scanCorner, styles.bottomLeft]} />
-                  <View style={[styles.scanCorner, styles.bottomRight]} />
-                </View>
-                <Text style={styles.scanHint}>
-                  Cadrez le NOM du destinataire
-                </Text>
-              </View>
-              <TouchableOpacity 
-                style={styles.captureButton} 
-                onPress={takePicture}
-                disabled={isProcessingOCR}
-              >
-                {isProcessingOCR ? (
-                  <ActivityIndicator color="#FFF" size="large" />
-                ) : (
-                  <Ionicons name="camera" size={40} color="#FFF" />
-                )}
-              </TouchableOpacity>
-            </>
-          )}
+            
+            {/* Status */}
+            <View style={styles.statusContainer}>
+              {isScanning ? (
+                <>
+                  <ActivityIndicator size="small" color="#FFF" />
+                  <Text style={styles.statusText}>{scanStatus}</Text>
+                </>
+              ) : (
+                <Text style={styles.statusText}>Scan en pause</Text>
+              )}
+            </View>
+
+            {/* Instructions */}
+            <Text style={styles.instructionText}>
+              Placez le NOM du destinataire dans le cadre
+            </Text>
+          </View>
         </View>
       ) : (
         <KeyboardAvoidingView
@@ -363,15 +414,14 @@ export default function ScannerScreen() {
         </KeyboardAvoidingView>
       )}
 
-      {/* Confirmation Modal */}
+      {/* Confirmation Modal - Name Detected */}
       <Modal visible={showConfirmModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.successBadge}>
-              <Ionicons name="checkmark-circle" size={40} color="#34C759" />
+              <Ionicons name="checkmark-circle" size={50} color="#34C759" />
             </View>
-            <Text style={styles.modalTitle}>Nom Trouvé !</Text>
-            <Text style={styles.modalSubtitle}>Confirmez ou modifiez :</Text>
+            <Text style={styles.modalTitle}>Nom Détecté !</Text>
             <TextInput
               style={styles.modalInput}
               placeholder="Nom du destinataire"
@@ -380,22 +430,23 @@ export default function ScannerScreen() {
               onChangeText={setManualName}
               autoCapitalize="words"
               autoCorrect={false}
+              autoFocus
             />
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
                 onPress={() => {
                   setShowConfirmModal(false);
-                  setCapturedImage(null);
                   setManualName('');
+                  setDetectedName(null);
                 }}
               >
-                <Text style={styles.cancelButtonText}>Annuler</Text>
+                <Text style={styles.cancelButtonText}>Réessayer</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalButton, styles.confirmButton]}
                 onPress={() => processName(manualName)}
-                disabled={isLoading}
+                disabled={isLoading || !manualName.trim()}
               >
                 {isLoading ? (
                   <ActivityIndicator color="#FFF" size="small" />
@@ -420,15 +471,15 @@ export default function ScannerScreen() {
               />
             </View>
             <Text style={styles.resultTitle}>
-              {lastResult?.is_new ? 'Nouveau Destinataire' : 'Mis à Jour'}
+              {lastResult?.is_new ? 'Nouveau' : 'Mis à Jour'}
             </Text>
             <Text style={styles.resultName}>{lastResult?.name}</Text>
             <Text style={styles.resultCount}>
               {lastResult?.package_count} colis
             </Text>
             <TouchableOpacity style={styles.resultButton} onPress={resetScanner}>
-              <Ionicons name="add-circle" size={24} color="#FFF" />
-              <Text style={styles.resultButtonText}>Ajouter un autre</Text>
+              <Ionicons name="scan" size={24} color="#FFF" />
+              <Text style={styles.resultButtonText}>Suivant</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -438,7 +489,7 @@ export default function ScannerScreen() {
       <Modal visible={showListModal} animationType="slide">
         <SafeAreaView style={styles.listModalContainer}>
           <View style={styles.listHeader}>
-            <Text style={styles.listTitle}>Colis en Attente</Text>
+            <Text style={styles.listTitle}>En Attente</Text>
             <TouchableOpacity onPress={() => setShowListModal(false)}>
               <Ionicons name="close" size={28} color="#333" />
             </TouchableOpacity>
@@ -447,18 +498,16 @@ export default function ScannerScreen() {
             {packages.length === 0 ? (
               <View style={styles.emptyList}>
                 <Ionicons name="cube-outline" size={60} color="#CCC" />
-                <Text style={styles.emptyListText}>Aucun colis en attente</Text>
+                <Text style={styles.emptyListText}>Aucun colis</Text>
               </View>
             ) : (
               packages.map((pkg) => (
                 <View key={pkg.id} style={styles.packageItem}>
                   <View style={styles.packageInfo}>
                     <Text style={styles.packageName}>{pkg.name}</Text>
-                    <Text style={styles.packageStatus}>{pkg.statuts}</Text>
                   </View>
                   <View style={styles.packageCount}>
                     <Text style={styles.packageCountNumber}>{pkg.numero}</Text>
-                    <Text style={styles.packageCountLabel}>colis</Text>
                   </View>
                 </View>
               ))
@@ -485,13 +534,14 @@ export default function ScannerScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#000',
   },
   centerContent: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+    backgroundColor: '#F5F5F5',
   },
   header: {
     flexDirection: 'row',
@@ -499,42 +549,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#007AFF',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 10,
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
     color: '#FFF',
   },
-  listButton: {
+  headerButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  headerButton: {
     padding: 8,
-  },
-  modeSelector: {
-    flexDirection: 'row',
-    backgroundColor: '#E5E5E5',
-    margin: 12,
-    borderRadius: 12,
-    padding: 4,
-  },
-  modeButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: 10,
-    gap: 6,
-  },
-  modeButtonActive: {
-    backgroundColor: '#007AFF',
-  },
-  modeButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
-  },
-  modeButtonTextActive: {
-    color: '#FFF',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 8,
   },
   scannerContainer: {
     flex: 1,
@@ -548,93 +577,75 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  labelFrame: {
-    width: 320,
-    height: 180,
+  scanFrame: {
+    width: 300,
+    height: 150,
     position: 'relative',
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.3)',
-    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   scanCorner: {
     position: 'absolute',
-    width: 30,
-    height: 30,
+    width: 40,
+    height: 40,
     borderColor: '#00FF00',
   },
   topLeft: {
-    top: -2,
-    left: -2,
+    top: 0,
+    left: 0,
     borderTopWidth: 4,
     borderLeftWidth: 4,
-    borderTopLeftRadius: 8,
   },
   topRight: {
-    top: -2,
-    right: -2,
+    top: 0,
+    right: 0,
     borderTopWidth: 4,
     borderRightWidth: 4,
-    borderTopRightRadius: 8,
   },
   bottomLeft: {
-    bottom: -2,
-    left: -2,
+    bottom: 0,
+    left: 0,
     borderBottomWidth: 4,
     borderLeftWidth: 4,
-    borderBottomLeftRadius: 8,
   },
   bottomRight: {
-    bottom: -2,
-    right: -2,
+    bottom: 0,
+    right: 0,
     borderBottomWidth: 4,
     borderRightWidth: 4,
-    borderBottomRightRadius: 8,
   },
-  scanHint: {
+  scanningIndicator: {
+    position: 'absolute',
+  },
+  statusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginTop: 20,
-    fontSize: 16,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 8,
+  },
+  statusText: {
     color: '#FFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  instructionText: {
+    position: 'absolute',
+    bottom: 50,
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '600',
     backgroundColor: 'rgba(0,0,0,0.7)',
     paddingHorizontal: 20,
     paddingVertical: 10,
-    borderRadius: 8,
-    fontWeight: '600',
-  },
-  captureButton: {
-    position: 'absolute',
-    bottom: 40,
-    alignSelf: 'center',
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#007AFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 4,
-    borderColor: '#FFF',
-  },
-  previewContainer: {
-    flex: 1,
-    position: 'relative',
-  },
-  previewImage: {
-    flex: 1,
-    resizeMode: 'contain',
-  },
-  ocrOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  ocrText: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: '600',
-    marginTop: 16,
+    borderRadius: 10,
   },
   manualContainer: {
     flex: 1,
+    backgroundColor: '#F5F5F5',
   },
   manualContent: {
     flex: 1,
@@ -679,7 +690,7 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -695,27 +706,23 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   modalTitle: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: 'bold',
     color: '#333',
     textAlign: 'center',
-    marginBottom: 8,
-  },
-  modalSubtitle: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 12,
-    textAlign: 'center',
+    marginBottom: 16,
   },
   modalInput: {
     backgroundColor: '#F5F5F5',
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    fontSize: 18,
+    fontSize: 20,
+    fontWeight: '600',
     borderWidth: 2,
-    borderColor: '#E5E5E5',
+    borderColor: '#007AFF',
     marginBottom: 20,
+    textAlign: 'center',
   },
   modalButtons: {
     flexDirection: 'row',
@@ -736,7 +743,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   confirmButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#34C759',
   },
   confirmButtonText: {
     color: '#FFF',
@@ -752,7 +759,7 @@ const styles = StyleSheet.create({
     borderRadius: 40,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   newIcon: {
     backgroundColor: '#34C759',
@@ -761,28 +768,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
   },
   resultTitle: {
-    fontSize: 18,
+    fontSize: 16,
     color: '#666',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   resultName: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   resultCount: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
     color: '#007AFF',
-    marginBottom: 24,
+    marginBottom: 20,
   },
   resultButton: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#007AFF',
     paddingHorizontal: 24,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderRadius: 30,
     gap: 8,
   },
@@ -830,7 +837,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: '#FFF',
-    padding: 16,
+    padding: 14,
     borderRadius: 12,
     marginBottom: 8,
   },
@@ -838,31 +845,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   packageName: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
     color: '#333',
   },
-  packageStatus: {
-    fontSize: 14,
-    color: '#007AFF',
-    marginTop: 4,
-  },
   packageCount: {
-    alignItems: 'center',
     backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
   },
   packageCountNumber: {
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#FFF',
-  },
-  packageCountLabel: {
-    fontSize: 12,
-    color: '#FFF',
-    opacity: 0.8,
   },
   refreshListButton: {
     flexDirection: 'row',
@@ -870,7 +866,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#007AFF',
     margin: 16,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderRadius: 12,
     gap: 8,
   },
@@ -881,14 +877,14 @@ const styles = StyleSheet.create({
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: 'rgba(0,0,0,0.8)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   loadingText: {
     marginTop: 12,
     fontSize: 16,
-    color: '#666',
+    color: '#FFF',
   },
   permissionTitle: {
     fontSize: 24,
@@ -906,7 +902,7 @@ const styles = StyleSheet.create({
   },
   permissionButton: {
     backgroundColor: '#007AFF',
-    paddingHorizontal: 32,
+    paddingHorizontal: 40,
     paddingVertical: 14,
     borderRadius: 30,
   },
