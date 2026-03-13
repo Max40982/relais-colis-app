@@ -157,30 +157,53 @@ def format_name(name: str) -> str:
             return f"{surname} {firstname}".strip()
 
 async def get_next_numero():
-    """Get the next available unique numero"""
+    """Get the next available unique numero (finds first gap in sequence)"""
     try:
-        # Get all records to find max numero
-        result = await airtable_request("GET", "?fields%5B%5D=Numéro&pageSize=100")
-        records = result.get("records", [])
+        # Get all existing numeros - fetch all records
+        all_numeros = set()
+        page_count = 0
         
-        max_numero = 0
+        result = await airtable_request("GET", "?pageSize=100")
+        records = result.get("records", [])
+        page_count += 1
+        
         for record in records:
             numero = record.get("fields", {}).get("Numéro", 0)
-            if isinstance(numero, int) and numero > max_numero:
-                max_numero = numero
+            if isinstance(numero, int) and numero > 0:
+                all_numeros.add(numero)
+        
+        logger.info(f"Page {page_count}: got {len(records)} records, {len(all_numeros)} unique numeros so far")
         
         # If there are more pages, continue fetching
         offset = result.get("offset")
         while offset:
-            result = await airtable_request("GET", f"?fields%5B%5D=Numéro&pageSize=100&offset={offset}")
+            logger.info(f"Fetching page {page_count + 1} with offset...")
+            result = await airtable_request("GET", f"?pageSize=100&offset={offset}")
             records = result.get("records", [])
+            page_count += 1
+            
             for record in records:
                 numero = record.get("fields", {}).get("Numéro", 0)
-                if isinstance(numero, int) and numero > max_numero:
-                    max_numero = numero
+                if isinstance(numero, int) and numero > 0:
+                    all_numeros.add(numero)
+            
+            logger.info(f"Page {page_count}: got {len(records)} records, {len(all_numeros)} unique numeros so far")
             offset = result.get("offset")
         
-        return max_numero + 1
+        logger.info(f"Total: Found {len(all_numeros)} unique numeros across {page_count} pages")
+        
+        # Find the first available numero (first gap in sequence)
+        if not all_numeros:
+            return 1
+        
+        # Start from 1 and find the first missing number
+        next_numero = 1
+        while next_numero in all_numeros:
+            next_numero += 1
+        
+        logger.info(f"Next available numero: {next_numero} (gaps start at {next_numero})")
+        return next_numero
+        
     except Exception as e:
         logger.error(f"Error getting next numero: {e}")
         # Fallback: return a high number based on timestamp
