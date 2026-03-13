@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -20,20 +20,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 
-// Types
 interface ScanResponse {
   success: boolean;
   message: string;
   name: string;
   is_new: boolean;
   package_count: number;
-  record_id?: string;
 }
 
 interface OCRResponse {
   success: boolean;
   name?: string;
-  raw_text?: string;
   message: string;
 }
 
@@ -42,7 +39,6 @@ interface PackageRecord {
   name: string;
   numero: number;
   statuts: string;
-  note?: string;
 }
 
 export default function ScannerScreen() {
@@ -53,89 +49,41 @@ export default function ScannerScreen() {
   const [showResultModal, setShowResultModal] = useState(false);
   const [showListModal, setShowListModal] = useState(false);
   const [packages, setPackages] = useState<PackageRecord[]>([]);
-  const [scanMode, setScanMode] = useState<'auto' | 'manual'>('auto');
-  const [showPermissionScreen, setShowPermissionScreen] = useState(true);
+  const [scanMode, setScanMode] = useState<'photo' | 'manual'>('photo');
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [scanStatus, setScanStatus] = useState('Recherche du nom...');
-  const [detectedName, setDetectedName] = useState<string | null>(null);
   
   const cameraRef = useRef<any>(null);
-  const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const isProcessingRef = useRef(false);
-  const soundRef = useRef<Audio.Sound | null>(null);
 
-  // Load success sound
   useEffect(() => {
-    loadSound();
-    return () => {
-      unloadSound();
-      stopAutoScan();
-    };
+    Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
   }, []);
 
-  const loadSound = async () => {
+  const playSound = async (success: boolean) => {
     try {
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-      });
-    } catch (error) {
-      console.log('Error setting audio mode:', error);
-    }
-  };
-
-  const unloadSound = async () => {
-    if (soundRef.current) {
-      await soundRef.current.unloadAsync();
-    }
-  };
-
-  const playSuccessSound = async () => {
-    try {
-      // Play system sound via vibration pattern
       if (Platform.OS !== 'web') {
-        Vibration.vibrate([0, 50, 50, 50, 50, 50]);
+        Vibration.vibrate(success ? [0, 50, 30, 50] : [0, 100, 50, 100]);
       }
-      
-      // Try to play a beep sound
       const { sound } = await Audio.Sound.createAsync(
-        { uri: 'https://www.soundjay.com/buttons/beep-01a.mp3' },
-        { shouldPlay: true, volume: 1.0 }
+        { uri: success ? 'https://www.soundjay.com/buttons/beep-01a.mp3' : 'https://www.soundjay.com/buttons/beep-02.mp3' },
+        { shouldPlay: true }
       );
-      soundRef.current = sound;
-      
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          sound.unloadAsync();
-        }
-      });
-    } catch (error) {
-      // Fallback to vibration only
-      if (Platform.OS !== 'web') {
-        Vibration.vibrate([0, 100, 50, 100]);
-      }
+      sound.setOnPlaybackStatusUpdate((s) => { if (s.isLoaded && s.didJustFinish) sound.unloadAsync(); });
+    } catch (e) {
+      if (Platform.OS !== 'web') Vibration.vibrate(100);
     }
   };
 
-  const playErrorSound = async () => {
-    if (Platform.OS !== 'web') {
-      Vibration.vibrate([0, 200, 100, 200]);
-    }
-  };
-
-  // Auto scan function
-  const autoScan = useCallback(async () => {
-    if (!cameraRef.current || isProcessingRef.current || !isScanning) return;
+  const takePicture = async () => {
+    if (!cameraRef.current || isScanning) return;
     
-    isProcessingRef.current = true;
+    setIsScanning(true);
     
     try {
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
         quality: 0.2,
         skipProcessing: true,
-        exif: false,
       });
       
       if (photo.base64) {
@@ -148,64 +96,28 @@ export default function ScannerScreen() {
         const result: OCRResponse = await response.json();
         
         if (result.success && result.name) {
-          // Name found! Stop scanning and show confirmation
-          stopAutoScan();
-          setDetectedName(result.name);
+          await playSound(true);
           setManualName(result.name);
-          await playSuccessSound();
           setShowConfirmModal(true);
+        } else {
+          await playSound(false);
+          Alert.alert('Nom non trouvé', 'Réessayez ou utilisez le mode manuel', [
+            { text: 'OK' },
+            { text: 'Manuel', onPress: () => setScanMode('manual') }
+          ]);
         }
       }
     } catch (error) {
-      console.log('Auto scan error:', error);
+      await playSound(false);
+      Alert.alert('Erreur', 'Problème de connexion');
     } finally {
-      isProcessingRef.current = false;
+      setIsScanning(false);
     }
-  }, [isScanning]);
-
-  const startAutoScan = useCallback(() => {
-    if (scanIntervalRef.current) return;
-    
-    setIsScanning(true);
-    setScanStatus('Recherche du nom...');
-    setDetectedName(null);
-    
-    // Start scanning every 1.5 seconds
-    scanIntervalRef.current = setInterval(() => {
-      autoScan();
-    }, 1500);
-    
-    // Also do immediate scan
-    setTimeout(autoScan, 500);
-  }, [autoScan]);
-
-  const stopAutoScan = useCallback(() => {
-    if (scanIntervalRef.current) {
-      clearInterval(scanIntervalRef.current);
-      scanIntervalRef.current = null;
-    }
-    setIsScanning(false);
-    isProcessingRef.current = false;
-  }, []);
-
-  // Start auto scan when camera is ready and mode is auto
-  useEffect(() => {
-    if (permission?.granted && scanMode === 'auto' && !showConfirmModal && !showResultModal) {
-      const timer = setTimeout(() => {
-        startAutoScan();
-      }, 1000);
-      return () => clearTimeout(timer);
-    } else {
-      stopAutoScan();
-    }
-  }, [permission?.granted, scanMode, showConfirmModal, showResultModal]);
+  };
 
   const processName = async (name: string) => {
-    if (!name.trim()) {
-      Alert.alert('Erreur', 'Le nom ne peut pas être vide');
-      return;
-    }
-
+    if (!name.trim()) return;
+    
     setIsLoading(true);
     setShowConfirmModal(false);
 
@@ -219,18 +131,17 @@ export default function ScannerScreen() {
       const result: ScanResponse = await response.json();
 
       if (response.ok && result.success) {
-        await playSuccessSound();
+        await playSound(true);
         setLastResult(result);
         setShowResultModal(true);
         setManualName('');
-        setDetectedName(null);
       } else {
-        await playErrorSound();
-        Alert.alert('Erreur', result.message || 'Une erreur est survenue');
+        await playSound(false);
+        Alert.alert('Erreur', result.message);
       }
     } catch (error) {
-      await playErrorSound();
-      Alert.alert('Erreur', 'Impossible de contacter le serveur');
+      await playSound(false);
+      Alert.alert('Erreur', 'Connexion impossible');
     } finally {
       setIsLoading(false);
     }
@@ -240,219 +151,127 @@ export default function ScannerScreen() {
     setManualName('');
     setShowResultModal(false);
     setLastResult(null);
-    setDetectedName(null);
-    // Auto scan will restart via useEffect
   };
 
   const fetchPackages = async () => {
     try {
       const response = await fetch(`${BACKEND_URL}/api/packages`);
-      const data: PackageRecord[] = await response.json();
-      setPackages(data);
+      setPackages(await response.json());
     } catch (error) {
-      Alert.alert('Erreur', 'Impossible de charger la liste');
+      Alert.alert('Erreur', 'Impossible de charger');
     }
   };
 
-  const openPackageList = async () => {
-    stopAutoScan();
-    await fetchPackages();
-    setShowListModal(true);
-  };
-
-  const handleRequestPermission = async () => {
-    await requestPermission();
-    setShowPermissionScreen(false);
-  };
-
-  const handleManualMode = () => {
-    setShowPermissionScreen(false);
-    setScanMode('manual');
-    stopAutoScan();
-  };
-
-  // Loading state
   if (!permission) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.centerContent}>
+        <View style={styles.center}>
           <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Chargement...</Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  // Permission screen
-  if (!permission.granted && showPermissionScreen) {
+  if (!permission.granted) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.centerContent}>
-          <Ionicons name="scan-outline" size={80} color="#007AFF" />
-          <Text style={styles.permissionTitle}>Scan Automatique</Text>
-          <Text style={styles.permissionText}>
-            Autorisez la caméra pour scanner automatiquement les étiquettes.
-          </Text>
-          <TouchableOpacity style={styles.permissionButton} onPress={handleRequestPermission}>
-            <Text style={styles.permissionButtonText}>Autoriser</Text>
+        <View style={styles.center}>
+          <Ionicons name="camera" size={60} color="#007AFF" />
+          <Text style={styles.title}>Autoriser la caméra</Text>
+          <TouchableOpacity style={styles.btn} onPress={requestPermission}>
+            <Text style={styles.btnText}>Autoriser</Text>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.permissionButton, { backgroundColor: '#666', marginTop: 12 }]} 
-            onPress={handleManualMode}
-          >
-            <Text style={styles.permissionButtonText}>Mode Manuel</Text>
+          <TouchableOpacity style={[styles.btn, {backgroundColor: '#666', marginTop: 10}]} onPress={() => setScanMode('manual')}>
+            <Text style={styles.btnText}>Mode Manuel</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
-  // Main UI
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>📦 Relais Colis</Text>
-        <View style={styles.headerButtons}>
-          <TouchableOpacity 
-            style={styles.headerButton} 
-            onPress={() => {
-              if (scanMode === 'auto') {
-                stopAutoScan();
-                setScanMode('manual');
-              } else {
-                setScanMode('auto');
-              }
-            }}
-          >
-            <Ionicons 
-              name={scanMode === 'auto' ? 'scan' : 'pencil'} 
-              size={22} 
-              color="#FFF" 
-            />
+        <View style={styles.headerBtns}>
+          <TouchableOpacity style={styles.headerBtn} onPress={() => setScanMode(scanMode === 'photo' ? 'manual' : 'photo')}>
+            <Ionicons name={scanMode === 'photo' ? 'pencil' : 'camera'} size={20} color="#FFF" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.headerButton} onPress={openPackageList}>
-            <Ionicons name="list" size={22} color="#FFF" />
+          <TouchableOpacity style={styles.headerBtn} onPress={() => { fetchPackages(); setShowListModal(true); }}>
+            <Ionicons name="list" size={20} color="#FFF" />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Camera / Manual Mode */}
-      {scanMode === 'auto' && permission.granted ? (
-        <View style={styles.scannerContainer}>
-          <CameraView
-            ref={cameraRef}
-            style={styles.camera}
-            facing="back"
-          />
-          <View style={styles.scanOverlay}>
-            {/* Scan frame */}
-            <View style={styles.scanFrame}>
-              <View style={[styles.scanCorner, styles.topLeft]} />
-              <View style={[styles.scanCorner, styles.topRight]} />
-              <View style={[styles.scanCorner, styles.bottomLeft]} />
-              <View style={[styles.scanCorner, styles.bottomRight]} />
-              
-              {/* Scanning indicator */}
-              {isScanning && (
-                <View style={styles.scanningIndicator}>
-                  <ActivityIndicator size="small" color="#00FF00" />
-                </View>
-              )}
+      {/* Camera Mode */}
+      {scanMode === 'photo' ? (
+        <View style={styles.cameraContainer}>
+          <CameraView ref={cameraRef} style={styles.camera} facing="back" />
+          <View style={styles.overlay}>
+            <View style={styles.frame}>
+              <View style={[styles.corner, styles.tl]} />
+              <View style={[styles.corner, styles.tr]} />
+              <View style={[styles.corner, styles.bl]} />
+              <View style={[styles.corner, styles.br]} />
             </View>
-            
-            {/* Status */}
-            <View style={styles.statusContainer}>
-              {isScanning ? (
-                <>
-                  <ActivityIndicator size="small" color="#FFF" />
-                  <Text style={styles.statusText}>{scanStatus}</Text>
-                </>
-              ) : (
-                <Text style={styles.statusText}>Scan en pause</Text>
-              )}
-            </View>
-
-            {/* Instructions */}
-            <Text style={styles.instructionText}>
-              Placez le NOM du destinataire dans le cadre
-            </Text>
+            <Text style={styles.hint}>Cadrez le NOM puis appuyez</Text>
           </View>
+          <TouchableOpacity 
+            style={[styles.captureBtn, isScanning && styles.captureBtnDisabled]} 
+            onPress={takePicture}
+            disabled={isScanning}
+          >
+            {isScanning ? (
+              <ActivityIndicator color="#FFF" size="large" />
+            ) : (
+              <Ionicons name="scan" size={40} color="#FFF" />
+            )}
+          </TouchableOpacity>
         </View>
       ) : (
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.manualContainer}
-        >
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.manualContainer}>
           <View style={styles.manualContent}>
-            <Ionicons name="person-outline" size={60} color="#007AFF" />
+            <Ionicons name="person" size={50} color="#007AFF" />
             <Text style={styles.manualTitle}>Saisie Manuelle</Text>
             <TextInput
-              style={styles.manualInput}
+              style={styles.input}
               placeholder="Nom du destinataire"
               placeholderTextColor="#999"
               value={manualName}
               onChangeText={setManualName}
               autoCapitalize="words"
-              autoCorrect={false}
             />
             <TouchableOpacity
-              style={[styles.submitButton, !manualName.trim() && styles.submitButtonDisabled]}
+              style={[styles.submitBtn, !manualName.trim() && styles.submitBtnDisabled]}
               onPress={() => processName(manualName)}
               disabled={!manualName.trim() || isLoading}
             >
-              {isLoading ? (
-                <ActivityIndicator color="#FFF" />
-              ) : (
-                <>
-                  <Ionicons name="checkmark-circle" size={24} color="#FFF" />
-                  <Text style={styles.submitButtonText}>Valider</Text>
-                </>
-              )}
+              {isLoading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.submitBtnText}>Valider</Text>}
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
       )}
 
-      {/* Confirmation Modal - Name Detected */}
+      {/* Confirm Modal */}
       <Modal visible={showConfirmModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.successBadge}>
-              <Ionicons name="checkmark-circle" size={50} color="#34C759" />
-            </View>
-            <Text style={styles.modalTitle}>Nom Détecté !</Text>
+        <View style={styles.modalBg}>
+          <View style={styles.modal}>
+            <Ionicons name="checkmark-circle" size={50} color="#34C759" />
+            <Text style={styles.modalTitle}>Nom Détecté</Text>
             <TextInput
               style={styles.modalInput}
-              placeholder="Nom du destinataire"
-              placeholderTextColor="#999"
               value={manualName}
               onChangeText={setManualName}
               autoCapitalize="words"
-              autoCorrect={false}
               autoFocus
             />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
-                  setShowConfirmModal(false);
-                  setManualName('');
-                  setDetectedName(null);
-                }}
-              >
-                <Text style={styles.cancelButtonText}>Réessayer</Text>
+            <View style={styles.modalBtns}>
+              <TouchableOpacity style={styles.modalBtnCancel} onPress={() => { setShowConfirmModal(false); setManualName(''); }}>
+                <Text style={styles.modalBtnCancelText}>Réessayer</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={() => processName(manualName)}
-                disabled={isLoading || !manualName.trim()}
-              >
-                {isLoading ? (
-                  <ActivityIndicator color="#FFF" size="small" />
-                ) : (
-                  <Text style={styles.confirmButtonText}>Valider</Text>
-                )}
+              <TouchableOpacity style={styles.modalBtnConfirm} onPress={() => processName(manualName)} disabled={isLoading}>
+                {isLoading ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={styles.modalBtnConfirmText}>Valider</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -461,70 +280,51 @@ export default function ScannerScreen() {
 
       {/* Result Modal */}
       <Modal visible={showResultModal} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, styles.resultModal]}>
-            <View style={[styles.resultIcon, lastResult?.is_new ? styles.newIcon : styles.updateIcon]}>
-              <Ionicons
-                name={lastResult?.is_new ? 'person-add' : 'refresh-circle'}
-                size={50}
-                color="#FFF"
-              />
+        <View style={styles.modalBg}>
+          <View style={[styles.modal, styles.resultModal]}>
+            <View style={[styles.resultIcon, lastResult?.is_new ? styles.iconNew : styles.iconUpdate]}>
+              <Ionicons name={lastResult?.is_new ? 'person-add' : 'refresh'} size={40} color="#FFF" />
             </View>
-            <Text style={styles.resultTitle}>
-              {lastResult?.is_new ? 'Nouveau' : 'Mis à Jour'}
-            </Text>
+            <Text style={styles.resultLabel}>{lastResult?.is_new ? 'Nouveau' : 'Mis à jour'}</Text>
             <Text style={styles.resultName}>{lastResult?.name}</Text>
-            <Text style={styles.resultCount}>
-              {lastResult?.package_count} colis
-            </Text>
-            <TouchableOpacity style={styles.resultButton} onPress={resetScanner}>
-              <Ionicons name="scan" size={24} color="#FFF" />
-              <Text style={styles.resultButtonText}>Suivant</Text>
+            <Text style={styles.resultCount}>{lastResult?.package_count} colis</Text>
+            <TouchableOpacity style={styles.resultBtn} onPress={resetScanner}>
+              <Ionicons name="scan" size={20} color="#FFF" />
+              <Text style={styles.resultBtnText}>Suivant</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Package List Modal */}
+      {/* List Modal */}
       <Modal visible={showListModal} animationType="slide">
-        <SafeAreaView style={styles.listModalContainer}>
+        <SafeAreaView style={styles.listContainer}>
           <View style={styles.listHeader}>
             <Text style={styles.listTitle}>En Attente</Text>
             <TouchableOpacity onPress={() => setShowListModal(false)}>
               <Ionicons name="close" size={28} color="#333" />
             </TouchableOpacity>
           </View>
-          <ScrollView style={styles.packageList}>
-            {packages.length === 0 ? (
-              <View style={styles.emptyList}>
-                <Ionicons name="cube-outline" size={60} color="#CCC" />
-                <Text style={styles.emptyListText}>Aucun colis</Text>
-              </View>
-            ) : (
-              packages.map((pkg) => (
-                <View key={pkg.id} style={styles.packageItem}>
-                  <View style={styles.packageInfo}>
-                    <Text style={styles.packageName}>{pkg.name}</Text>
-                  </View>
-                  <View style={styles.packageCount}>
-                    <Text style={styles.packageCountNumber}>{pkg.numero}</Text>
-                  </View>
+          <ScrollView style={styles.list}>
+            {packages.map((p) => (
+              <View key={p.id} style={styles.listItem}>
+                <Text style={styles.listItemName}>{p.name}</Text>
+                <View style={styles.listItemBadge}>
+                  <Text style={styles.listItemBadgeText}>{p.numero}</Text>
                 </View>
-              ))
-            )}
+              </View>
+            ))}
           </ScrollView>
-          <TouchableOpacity style={styles.refreshListButton} onPress={fetchPackages}>
-            <Ionicons name="refresh" size={20} color="#FFF" />
-            <Text style={styles.refreshListButtonText}>Actualiser</Text>
+          <TouchableOpacity style={styles.refreshBtn} onPress={fetchPackages}>
+            <Ionicons name="refresh" size={18} color="#FFF" />
+            <Text style={styles.refreshBtnText}>Actualiser</Text>
           </TouchableOpacity>
         </SafeAreaView>
       </Modal>
 
-      {/* Loading Overlay */}
       {isLoading && (
         <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Enregistrement...</Text>
+          <ActivityIndicator size="large" color="#FFF" />
         </View>
       )}
     </SafeAreaView>
@@ -532,383 +332,61 @@ export default function ScannerScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  centerContent: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-    backgroundColor: '#F5F5F5',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#FFF',
-  },
-  headerButtons: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  headerButton: {
-    padding: 8,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 8,
-  },
-  scannerContainer: {
-    flex: 1,
-    position: 'relative',
-  },
-  camera: {
-    flex: 1,
-  },
-  scanOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scanFrame: {
-    width: 300,
-    height: 150,
-    position: 'relative',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scanCorner: {
-    position: 'absolute',
-    width: 40,
-    height: 40,
-    borderColor: '#00FF00',
-  },
-  topLeft: {
-    top: 0,
-    left: 0,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
-  },
-  topRight: {
-    top: 0,
-    right: 0,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
-  },
-  bottomLeft: {
-    bottom: 0,
-    left: 0,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
-  },
-  bottomRight: {
-    bottom: 0,
-    right: 0,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
-  },
-  scanningIndicator: {
-    position: 'absolute',
-  },
-  statusContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 20,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    gap: 8,
-  },
-  statusText: {
-    color: '#FFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  instructionText: {
-    position: 'absolute',
-    bottom: 50,
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  manualContainer: {
-    flex: 1,
-    backgroundColor: '#F5F5F5',
-  },
-  manualContent: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  manualTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginTop: 16,
-    marginBottom: 24,
-  },
-  manualInput: {
-    width: '100%',
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 18,
-    borderWidth: 2,
-    borderColor: '#E5E5E5',
-    marginBottom: 20,
-  },
-  submitButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#34C759',
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: 30,
-    gap: 8,
-  },
-  submitButtonDisabled: {
-    backgroundColor: '#CCC',
-  },
-  submitButtonText: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: '#FFF',
-    borderRadius: 20,
-    padding: 24,
-    width: '85%',
-    maxWidth: 400,
-  },
-  successBadge: {
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  modalTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  modalInput: {
-    backgroundColor: '#F5F5F5',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 20,
-    fontWeight: '600',
-    borderWidth: 2,
-    borderColor: '#007AFF',
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  cancelButton: {
-    backgroundColor: '#F5F5F5',
-  },
-  cancelButtonText: {
-    color: '#666',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  confirmButton: {
-    backgroundColor: '#34C759',
-  },
-  confirmButtonText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  resultModal: {
-    alignItems: 'center',
-  },
-  resultIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  newIcon: {
-    backgroundColor: '#34C759',
-  },
-  updateIcon: {
-    backgroundColor: '#007AFF',
-  },
-  resultTitle: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 4,
-  },
-  resultName: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
-  },
-  resultCount: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#007AFF',
-    marginBottom: 20,
-  },
-  resultButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 30,
-    gap: 8,
-  },
-  resultButtonText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  listModalContainer: {
-    flex: 1,
-    backgroundColor: '#F5F5F5',
-  },
-  listHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
-  },
-  listTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  packageList: {
-    flex: 1,
-    padding: 12,
-  },
-  emptyList: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingTop: 60,
-  },
-  emptyListText: {
-    fontSize: 16,
-    color: '#999',
-    marginTop: 12,
-  },
-  packageItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 8,
-  },
-  packageInfo: {
-    flex: 1,
-  },
-  packageName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
-  packageCount: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
-  },
-  packageCountNumber: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#FFF',
-  },
-  refreshListButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#007AFF',
-    margin: 16,
-    paddingVertical: 12,
-    borderRadius: 12,
-    gap: 8,
-  },
-  refreshListButtonText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 16,
-    color: '#FFF',
-  },
-  permissionTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginTop: 20,
-    marginBottom: 12,
-  },
-  permissionText: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 24,
-  },
-  permissionButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 40,
-    paddingVertical: 14,
-    borderRadius: 30,
-  },
-  permissionButtonText: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: '600',
-  },
+  container: { flex: 1, backgroundColor: '#000' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F5F5F5', padding: 20 },
+  title: { fontSize: 20, fontWeight: 'bold', marginTop: 16, marginBottom: 20, color: '#333' },
+  btn: { backgroundColor: '#007AFF', paddingHorizontal: 40, paddingVertical: 14, borderRadius: 25 },
+  btnText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#007AFF', paddingHorizontal: 16, paddingVertical: 10 },
+  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#FFF' },
+  headerBtns: { flexDirection: 'row', gap: 8 },
+  headerBtn: { padding: 8, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8 },
+  cameraContainer: { flex: 1 },
+  camera: { flex: 1 },
+  overlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
+  frame: { width: 280, height: 120, position: 'relative' },
+  corner: { position: 'absolute', width: 30, height: 30, borderColor: '#00FF00' },
+  tl: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4 },
+  tr: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4 },
+  bl: { bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4 },
+  br: { bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4 },
+  hint: { marginTop: 16, color: '#FFF', fontSize: 14, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
+  captureBtn: { position: 'absolute', bottom: 40, alignSelf: 'center', width: 80, height: 80, borderRadius: 40, backgroundColor: '#007AFF', justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#FFF' },
+  captureBtnDisabled: { backgroundColor: '#666' },
+  manualContainer: { flex: 1, backgroundColor: '#F5F5F5' },
+  manualContent: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  manualTitle: { fontSize: 22, fontWeight: 'bold', color: '#333', marginTop: 12, marginBottom: 20 },
+  input: { width: '100%', backgroundColor: '#FFF', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 18, borderWidth: 2, borderColor: '#E5E5E5', marginBottom: 16 },
+  submitBtn: { backgroundColor: '#34C759', paddingHorizontal: 40, paddingVertical: 14, borderRadius: 25 },
+  submitBtnDisabled: { backgroundColor: '#CCC' },
+  submitBtnText: { color: '#FFF', fontSize: 18, fontWeight: '600' },
+  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
+  modal: { backgroundColor: '#FFF', borderRadius: 20, padding: 24, width: '85%', alignItems: 'center' },
+  modalTitle: { fontSize: 22, fontWeight: 'bold', color: '#333', marginTop: 8, marginBottom: 16 },
+  modalInput: { width: '100%', backgroundColor: '#F5F5F5', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 20, fontWeight: '600', textAlign: 'center', borderWidth: 2, borderColor: '#007AFF', marginBottom: 16 },
+  modalBtns: { flexDirection: 'row', gap: 12, width: '100%' },
+  modalBtnCancel: { flex: 1, backgroundColor: '#F0F0F0', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  modalBtnCancelText: { color: '#666', fontSize: 16, fontWeight: '600' },
+  modalBtnConfirm: { flex: 1, backgroundColor: '#34C759', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  modalBtnConfirmText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
+  resultModal: { alignItems: 'center' },
+  resultIcon: { width: 70, height: 70, borderRadius: 35, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  iconNew: { backgroundColor: '#34C759' },
+  iconUpdate: { backgroundColor: '#007AFF' },
+  resultLabel: { fontSize: 14, color: '#666' },
+  resultName: { fontSize: 20, fontWeight: 'bold', color: '#333', marginVertical: 4 },
+  resultCount: { fontSize: 28, fontWeight: 'bold', color: '#007AFF', marginBottom: 16 },
+  resultBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#007AFF', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25, gap: 8 },
+  resultBtnText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
+  listContainer: { flex: 1, backgroundColor: '#F5F5F5' },
+  listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' },
+  listTitle: { fontSize: 20, fontWeight: 'bold', color: '#333' },
+  list: { flex: 1, padding: 12 },
+  listItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FFF', padding: 14, borderRadius: 12, marginBottom: 8 },
+  listItemName: { fontSize: 16, fontWeight: '600', color: '#333', flex: 1 },
+  listItemBadge: { backgroundColor: '#007AFF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
+  listItemBadgeText: { color: '#FFF', fontWeight: 'bold', fontSize: 14 },
+  refreshBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#007AFF', margin: 16, paddingVertical: 12, borderRadius: 12, gap: 8 },
+  refreshBtnText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
+  loadingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
 });
