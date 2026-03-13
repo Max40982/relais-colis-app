@@ -157,13 +157,16 @@ def format_name(name: str) -> str:
             return f"{surname} {firstname}".strip()
 
 async def get_next_numero():
-    """Get the next available unique numero (finds first gap in sequence)"""
+    """Get the next available unique numero (finds first gap - only counts 'En attente' status)"""
+    import urllib.parse
     try:
-        # Get all existing numeros - fetch all records
+        # Get only records with "En attente" status
         all_numeros = set()
         page_count = 0
         
-        result = await airtable_request("GET", "?pageSize=100")
+        filter_formula = urllib.parse.quote("{Statuts}='En attente'")
+        
+        result = await airtable_request("GET", f"?filterByFormula={filter_formula}&pageSize=100")
         records = result.get("records", [])
         page_count += 1
         
@@ -172,13 +175,12 @@ async def get_next_numero():
             if isinstance(numero, int) and numero > 0:
                 all_numeros.add(numero)
         
-        logger.info(f"Page {page_count}: got {len(records)} records, {len(all_numeros)} unique numeros so far")
+        logger.info(f"Page {page_count}: got {len(records)} 'En attente' records, {len(all_numeros)} unique numeros")
         
         # If there are more pages, continue fetching
         offset = result.get("offset")
         while offset:
-            logger.info(f"Fetching page {page_count + 1} with offset...")
-            result = await airtable_request("GET", f"?pageSize=100&offset={offset}")
+            result = await airtable_request("GET", f"?filterByFormula={filter_formula}&pageSize=100&offset={offset}")
             records = result.get("records", [])
             page_count += 1
             
@@ -187,10 +189,9 @@ async def get_next_numero():
                 if isinstance(numero, int) and numero > 0:
                     all_numeros.add(numero)
             
-            logger.info(f"Page {page_count}: got {len(records)} records, {len(all_numeros)} unique numeros so far")
             offset = result.get("offset")
         
-        logger.info(f"Total: Found {len(all_numeros)} unique numeros across {page_count} pages")
+        logger.info(f"Total: Found {len(all_numeros)} unique numeros in 'En attente' records")
         
         # Find the first available numero (first gap in sequence)
         if not all_numeros:
@@ -201,7 +202,7 @@ async def get_next_numero():
         while next_numero in all_numeros:
             next_numero += 1
         
-        logger.info(f"Next available numero: {next_numero} (gaps start at {next_numero})")
+        logger.info(f"Next available numero: {next_numero}")
         return next_numero
         
     except Exception as e:
