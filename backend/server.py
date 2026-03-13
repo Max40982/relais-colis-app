@@ -289,28 +289,19 @@ async def extract_name_from_image(request: OCRRequest):
         if ',' in image_base64:
             image_base64 = image_base64.split(',')[1]
         
-        # Initialize chat with vision model
+        # Initialize chat with vision model - use gpt-4o-mini for speed
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"ocr-{uuid.uuid4()}",
-            system_message="""Tu es un assistant spécialisé dans l'extraction de noms de destinataires sur les étiquettes de colis.
-            
-Analyse l'image de l'étiquette et extrait UNIQUEMENT le nom du destinataire (la personne qui doit recevoir le colis).
-            
-Règles:
-- Retourne UNIQUEMENT le nom et prénom, rien d'autre
-- Format: "NOM Prénom" ou "Prénom NOM" selon ce qui est écrit
-- Ignore les adresses, codes postaux, numéros de téléphone, codes-barres
-- Si tu ne trouves pas de nom clair, retourne "INCONNU"
-- Ne retourne jamais d'explication, juste le nom"""
+            system_message="Extrait le nom du destinataire. Retourne UNIQUEMENT 'NOM Prénom', rien d'autre. Si pas de nom, retourne INCONNU."
         ).with_model("openai", "gpt-4o")
         
         # Create image content
         image_content = ImageContent(image_base64=image_base64)
         
-        # Send message with image
+        # Send message with image - shorter prompt for speed
         user_message = UserMessage(
-            text="Extrait le nom du destinataire de cette étiquette de colis. Retourne UNIQUEMENT le nom, rien d'autre.",
+            text="Nom du destinataire sur cette étiquette?",
             file_contents=[image_content]
         )
         

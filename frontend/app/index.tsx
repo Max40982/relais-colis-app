@@ -53,7 +53,7 @@ export default function ScannerScreen() {
   const [showResultModal, setShowResultModal] = useState(false);
   const [showListModal, setShowListModal] = useState(false);
   const [packages, setPackages] = useState<PackageRecord[]>([]);
-  const [scanMode, setScanMode] = useState<'photo' | 'manual'>('manual');
+  const [scanMode, setScanMode] = useState<'photo' | 'manual'>('photo');
   const [showPermissionScreen, setShowPermissionScreen] = useState(true);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -81,22 +81,18 @@ export default function ScannerScreen() {
     
     try {
       setIsProcessingOCR(true);
-      console.log('Taking picture...');
       
+      // Take photo with lower quality for faster upload
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
-        quality: 0.5,
+        quality: 0.3, // Lower quality = faster
         skipProcessing: true,
+        exif: false,
       });
       
-      console.log('Photo taken, base64 length:', photo.base64?.length);
-      
       if (photo.base64) {
-        setCapturedImage(`data:image/jpeg;base64,${photo.base64}`);
-        
-        console.log('Sending to OCR...');
-        
-        // Send to OCR
+        // Don't show preview image - go straight to OCR for speed
+        // Send to OCR immediately
         const response = await fetch(`${BACKEND_URL}/api/ocr`, {
           method: 'POST',
           headers: {
@@ -105,10 +101,7 @@ export default function ScannerScreen() {
           body: JSON.stringify({ image_base64: photo.base64 }),
         });
         
-        console.log('OCR response status:', response.status);
-        
         const result: OCRResponse = await response.json();
-        console.log('OCR result:', result);
         
         if (result.success && result.name) {
           playSuccessFeedback();
