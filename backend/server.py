@@ -127,35 +127,95 @@ async def find_recipient_by_name(name: str):
 
 def format_name(name: str) -> str:
     """Format name as 'NOM Prénom' - surname uppercase, firstname capitalized"""
+    
+    # Liste de prénoms français courants (pour éviter de les confondre avec des noms)
+    COMMON_FIRSTNAMES = {
+        'jean', 'pierre', 'marie', 'anne', 'paul', 'louis', 'jacques', 'michel',
+        'philippe', 'alain', 'bernard', 'patrick', 'daniel', 'nicolas', 'stephane',
+        'stéphane', 'christophe', 'david', 'eric', 'éric', 'laurent', 'pascal',
+        'olivier', 'thierry', 'francois', 'françois', 'bruno', 'vincent', 'claude',
+        'sophie', 'nathalie', 'isabelle', 'catherine', 'sylvie', 'christine',
+        'martine', 'sandrine', 'valerie', 'valérie', 'caroline', 'julie', 'celine',
+        'céline', 'aurelie', 'aurélie', 'emilie', 'émilie', 'marine', 'camille',
+        'maxime', 'thomas', 'antoine', 'alexandre', 'julien', 'romain', 'mathieu',
+        'kevin', 'sebastien', 'sébastien', 'jerome', 'jérôme', 'arnaud', 'anthony',
+        'guillaume', 'florian', 'adrien', 'benjamin', 'cedric', 'cédric', 'damien',
+        'fabien', 'franck', 'gregory', 'grégory', 'herve', 'hervé', 'jeremy', 'jérémy',
+        'jonathan', 'ludovic', 'marc', 'matthieu', 'mickael', 'mickaël', 'morgan',
+        'quentin', 'raphael', 'raphaël', 'remi', 'rémi', 'samuel', 'sylvain', 'xavier',
+        'yann', 'yoann', 'charlotte', 'clara', 'clemence', 'clémence', 'emma', 'lea',
+        'léa', 'lucie', 'manon', 'margot', 'marie', 'oceane', 'océane', 'pauline',
+        'sarah', 'amandine', 'audrey', 'laetitia', 'laëtitia', 'laura', 'marie-pierre',
+        'patricia', 'virginie', 'alexandra', 'alexia', 'amelie', 'amélie', 'anais',
+        'anaïs', 'angélique', 'angelique', 'aurore', 'carole', 'charline', 'cindy',
+        'coralie', 'delphine', 'doriane', 'elise', 'élise', 'elodie', 'élodie',
+        'estelle', 'eva', 'fanny', 'florine', 'helene', 'hélène', 'jessica', 'justine',
+        'karen', 'karine', 'kelly', 'kim', 'laurie', 'linda', 'lisa', 'lola', 'louise',
+        'lucile', 'lydia', 'madeleine', 'magali', 'maeva', 'maëva', 'marion', 'melanie',
+        'mélanie', 'melissa', 'mélissa', 'morgane', 'muriel', 'myriam', 'nadege',
+        'nadège', 'nina', 'ophelie', 'ophélie', 'rachel', 'sabrina', 'salome', 'salomé',
+        'solene', 'solène', 'stephanie', 'stéphanie', 'vanessa', 'veronique', 'véronique',
+        'bastien', 'corentin', 'dorian', 'dylan', 'enzo', 'evan', 'florent', 'hugo',
+        'jordan', 'killian', 'kylian', 'leo', 'léo', 'logan', 'lucas', 'luca', 'malo',
+        'martin', 'matteo', 'nathan', 'nolan', 'noah', 'noé', 'robin', 'ryan', 'theo',
+        'théo', 'titouan', 'tom', 'tristan', 'valentin', 'victor', 'william', 'yanis',
+        'adam', 'alexis', 'axel', 'baptiste', 'bryan', 'clement', 'clément', 'esteban',
+        'ethan', 'gabriel', 'gauthier', 'gautier', 'loic', 'loïc', 'lilian', 'loan',
+        'maël', 'mael', 'mathis', 'mattéo', 'mehdi', 'noe', 'pierre-louis', 'rayan',
+        'sacha', 'simon', 'thibault', 'thibaut', 'timeo', 'timéo', 'alexia', 'lina',
+        'ines', 'inès', 'jade', 'lena', 'léna', 'lilou', 'maëlle', 'maelle', 'mila',
+        'noemie', 'noémie', 'romane', 'rose', 'zoe', 'zoé', 'alice', 'anna', 'chloe',
+        'chloé', 'elena', 'eléna', 'elsa', 'lily', 'louna', 'luna', 'louise', 'maya',
+        # Prénoms composés courants
+        'jean-pierre', 'jean-paul', 'jean-louis', 'jean-marc', 'jean-claude',
+        'jean-philippe', 'jean-michel', 'jean-francois', 'jean-françois',
+        'marie-claire', 'marie-france', 'marie-helene', 'marie-hélène',
+        'anne-marie', 'anne-sophie', 'anne-laure',
+    }
+    
     parts = name.strip().split()
     if len(parts) == 0:
         return name
     elif len(parts) == 1:
-        # Just one word - make it uppercase (assume it's the surname)
         return parts[0].upper()
+    
+    # Convertir en minuscules pour comparaison
+    parts_lower = [p.lower() for p in parts]
+    
+    # Chercher quel mot est un prénom connu
+    firstname_idx = -1
+    surname_idx = -1
+    
+    for i, p_lower in enumerate(parts_lower):
+        if p_lower in COMMON_FIRSTNAMES:
+            firstname_idx = i
+            break
+    
+    if firstname_idx >= 0:
+        # On a trouvé un prénom - le reste est le nom de famille
+        firstname = parts[firstname_idx].capitalize()
+        surname_parts = [parts[j].upper() for j in range(len(parts)) if j != firstname_idx]
+        surname = ' '.join(surname_parts)
+        return f"{surname} {firstname}".strip()
+    
+    # Pas de prénom trouvé dans la liste - utiliser l'ancienne logique
+    # Chercher si un mot est en majuscules (probablement le nom)
+    uppercase_idx = -1
+    for i, part in enumerate(parts):
+        if part.isupper() and len(part) > 1:
+            uppercase_idx = i
+            break
+    
+    if uppercase_idx >= 0:
+        surname = parts[uppercase_idx].upper()
+        firstname_parts = [p.capitalize() for j, p in enumerate(parts) if j != uppercase_idx]
+        firstname = ' '.join(firstname_parts)
+        return f"{surname} {firstname}".strip()
     else:
-        # Multiple words - assume first word is surname, rest is firstname
-        # Or if first word is lowercase and second is uppercase, swap them
-        # Common formats: "DUPONT Jean" or "Jean DUPONT" or "Dupont Jean"
-        
-        # Check if any word is already fully uppercase (likely the surname)
-        uppercase_idx = -1
-        for i, part in enumerate(parts):
-            if part.isupper() and len(part) > 1:
-                uppercase_idx = i
-                break
-        
-        if uppercase_idx >= 0:
-            # Found an uppercase word - that's the surname
-            surname = parts[uppercase_idx].upper()
-            firstname_parts = [p.capitalize() for j, p in enumerate(parts) if j != uppercase_idx]
-            firstname = ' '.join(firstname_parts)
-            return f"{surname} {firstname}".strip()
-        else:
-            # No uppercase word - assume first word is surname
-            surname = parts[0].upper()
-            firstname = ' '.join([p.capitalize() for p in parts[1:]])
-            return f"{surname} {firstname}".strip()
+        # Assumer que le dernier mot est le nom (convention française)
+        surname = parts[-1].upper()
+        firstname = ' '.join([p.capitalize() for p in parts[:-1]])
+        return f"{surname} {firstname}".strip()
 
 async def get_next_numero():
     """Get the next available unique numero (finds first gap - only counts 'En attente' status)"""
@@ -290,19 +350,27 @@ async def extract_name_from_image(request: OCRRequest):
         if ',' in image_base64:
             image_base64 = image_base64.split(',')[1]
         
-        # Initialize chat with vision model - use gpt-4o-mini for speed
+        # Initialize chat with vision model
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"ocr-{uuid.uuid4()}",
-            system_message="Extrait le nom du destinataire. Retourne UNIQUEMENT 'NOM Prénom', rien d'autre. Si pas de nom, retourne INCONNU."
+            system_message="""Tu extrais le nom du destinataire d'étiquettes de colis.
+
+RÈGLES IMPORTANTES:
+- Le NOM DE FAMILLE doit être en MAJUSCULES
+- Le prénom doit avoir juste la première lettre en majuscule
+- Format: "NOM Prénom" (ex: DUPONT Jean, MARTIN Sophie)
+- Sur les étiquettes, le nom de famille est souvent celui écrit en majuscules ou en premier
+- Retourne UNIQUEMENT le nom formaté, rien d'autre
+- Si pas de nom trouvé, retourne INCONNU"""
         ).with_model("openai", "gpt-4o")
         
         # Create image content
         image_content = ImageContent(image_base64=image_base64)
         
-        # Send message with image - shorter prompt for speed
+        # Send message with image
         user_message = UserMessage(
-            text="Nom du destinataire sur cette étiquette?",
+            text="Extrait le nom du destinataire. Réponds UNIQUEMENT avec le format 'NOM Prénom' (nom de famille en MAJUSCULES, prénom normal). Exemple: DUPONT Jean",
             file_contents=[image_content]
         )
         
