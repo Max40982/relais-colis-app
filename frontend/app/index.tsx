@@ -26,6 +26,7 @@ interface ScanResponse {
   name: string;
   is_new: boolean;
   package_count: number;
+  numero: number;
 }
 
 interface OCRResponse {
@@ -82,7 +83,7 @@ export default function ScannerScreen() {
     try {
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
-        quality: 0.2,
+        quality: 0.15, // Ultra low for speed
         skipProcessing: true,
       });
       
@@ -278,16 +279,24 @@ export default function ScannerScreen() {
         </View>
       </Modal>
 
-      {/* Result Modal */}
+      {/* Result Modal - With Big Numero */}
       <Modal visible={showResultModal} transparent animationType="fade">
         <View style={styles.modalBg}>
           <View style={[styles.modal, styles.resultModal]}>
             <View style={[styles.resultIcon, lastResult?.is_new ? styles.iconNew : styles.iconUpdate]}>
-              <Ionicons name={lastResult?.is_new ? 'person-add' : 'refresh'} size={40} color="#FFF" />
+              <Ionicons name={lastResult?.is_new ? 'person-add' : 'refresh'} size={36} color="#FFF" />
             </View>
+            
             <Text style={styles.resultLabel}>{lastResult?.is_new ? 'Nouveau' : 'Mis à jour'}</Text>
             <Text style={styles.resultName}>{lastResult?.name}</Text>
             <Text style={styles.resultCount}>{lastResult?.package_count} colis</Text>
+            
+            {/* Big Numero Display */}
+            <View style={styles.numeroContainer}>
+              <Text style={styles.numeroLabel}>N°</Text>
+              <Text style={styles.numeroValue}>{lastResult?.numero}</Text>
+            </View>
+            
             <TouchableOpacity style={styles.resultBtn} onPress={resetScanner}>
               <Ionicons name="scan" size={20} color="#FFF" />
               <Text style={styles.resultBtnText}>Suivant</Text>
@@ -370,14 +379,25 @@ const styles = StyleSheet.create({
   modalBtnConfirm: { flex: 1, backgroundColor: '#34C759', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
   modalBtnConfirmText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
   resultModal: { alignItems: 'center' },
-  resultIcon: { width: 70, height: 70, borderRadius: 35, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  resultIcon: { width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
   iconNew: { backgroundColor: '#34C759' },
   iconUpdate: { backgroundColor: '#007AFF' },
-  resultLabel: { fontSize: 14, color: '#666' },
-  resultName: { fontSize: 20, fontWeight: 'bold', color: '#333', marginVertical: 4 },
-  resultCount: { fontSize: 28, fontWeight: 'bold', color: '#007AFF', marginBottom: 16 },
-  resultBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#007AFF', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25, gap: 8 },
-  resultBtnText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
+  resultLabel: { fontSize: 14, color: '#666', marginBottom: 2 },
+  resultName: { fontSize: 22, fontWeight: 'bold', color: '#333', marginBottom: 4 },
+  resultCount: { fontSize: 16, color: '#666', marginBottom: 12 },
+  numeroContainer: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: '#007AFF', 
+    paddingHorizontal: 24, 
+    paddingVertical: 12, 
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+  numeroLabel: { fontSize: 24, fontWeight: 'bold', color: '#FFF', marginRight: 8 },
+  numeroValue: { fontSize: 48, fontWeight: 'bold', color: '#FFF' },
+  resultBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#34C759', paddingHorizontal: 28, paddingVertical: 14, borderRadius: 25, gap: 8 },
+  resultBtnText: { color: '#FFF', fontSize: 18, fontWeight: '600' },
   listContainer: { flex: 1, backgroundColor: '#F5F5F5' },
   listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' },
   listTitle: { fontSize: 20, fontWeight: 'bold', color: '#333' },

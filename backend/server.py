@@ -61,6 +61,7 @@ class ScanResponse(BaseModel):
     name: str
     is_new: bool
     package_count: int
+    numero: int
     record_id: Optional[str] = None
 
 class PackageRecord(BaseModel):
@@ -360,6 +361,7 @@ async def process_scan(request: ScanRequest):
             # Update existing recipient - increment Note column
             record_id = existing_record["id"]
             existing_name = existing_record.get("fields", {}).get("Nom", formatted_name)
+            existing_numero = existing_record.get("fields", {}).get("Numéro", 0)
             current_note = existing_record.get("fields", {}).get("Note", "")
             
             result, new_count = await update_recipient_count(record_id, current_note)
@@ -372,6 +374,7 @@ async def process_scan(request: ScanRequest):
                 name=existing_name,
                 is_new=False,
                 package_count=new_count,
+                numero=existing_numero,
                 record_id=record_id
             )
         else:
@@ -379,8 +382,9 @@ async def process_scan(request: ScanRequest):
             new_record = await create_recipient(name)
             record_id = new_record.get("id")
             created_name = new_record.get("fields", {}).get("Nom", formatted_name)
+            created_numero = new_record.get("fields", {}).get("Numéro", 0)
             
-            logger.info(f"Created new recipient: {created_name}")
+            logger.info(f"Created new recipient: {created_name} with numero {created_numero}")
             
             return ScanResponse(
                 success=True,
@@ -388,6 +392,7 @@ async def process_scan(request: ScanRequest):
                 name=created_name,
                 is_new=True,
                 package_count=1,
+                numero=created_numero,
                 record_id=record_id
             )
     except HTTPException:
