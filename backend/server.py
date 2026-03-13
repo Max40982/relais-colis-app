@@ -156,18 +156,56 @@ def format_name(name: str) -> str:
             firstname = ' '.join([p.capitalize() for p in parts[1:]])
             return f"{surname} {firstname}".strip()
 
+async def get_next_numero():
+    """Get the next available unique numero"""
+    try:
+        # Get all records to find max numero
+        result = await airtable_request("GET", "?fields%5B%5D=Numéro&pageSize=100")
+        records = result.get("records", [])
+        
+        max_numero = 0
+        for record in records:
+            numero = record.get("fields", {}).get("Numéro", 0)
+            if isinstance(numero, int) and numero > max_numero:
+                max_numero = numero
+        
+        # If there are more pages, continue fetching
+        offset = result.get("offset")
+        while offset:
+            result = await airtable_request("GET", f"?fields%5B%5D=Numéro&pageSize=100&offset={offset}")
+            records = result.get("records", [])
+            for record in records:
+                numero = record.get("fields", {}).get("Numéro", 0)
+                if isinstance(numero, int) and numero > max_numero:
+                    max_numero = numero
+            offset = result.get("offset")
+        
+        return max_numero + 1
+    except Exception as e:
+        logger.error(f"Error getting next numero: {e}")
+        # Fallback: return a high number based on timestamp
+        import time
+        return int(time.time()) % 10000 + 100
+
 async def create_recipient(name: str):
-    """Create a new recipient in Airtable"""
+    """Create a new recipient in Airtable with unique numero"""
     formatted_name = format_name(name)
+    
+    # Get the next unique numero
+    next_numero = await get_next_numero()
+    
     data = {
         "records": [{
             "fields": {
                 "Nom": formatted_name,
-                "Numéro": 1,
+                "Numéro": next_numero,
                 "Statuts": "En attente"
             }
         }]
     }
+    
+    logger.info(f"Creating recipient {formatted_name} with Numéro {next_numero}")
+    
     result = await airtable_request("POST", "", data)
     return result.get("records", [{}])[0]
 

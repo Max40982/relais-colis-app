@@ -45,7 +45,8 @@
         {
           "cameraPermission": "Permet de scanner les codes-barres des colis"
         }
-      ]
+      ],
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true
