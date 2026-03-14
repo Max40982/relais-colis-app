@@ -109,6 +109,7 @@ async def airtable_request(method: str, endpoint: str, data: dict = None):
 
 async def find_recipient_by_name(name: str):
     """Find a recipient by name in Airtable (case insensitive, handles name order).
+    ONLY searches records with status 'En attente' - retired packages are ignored.
     
     Searches by:
     1. Exact formatted name match
@@ -116,40 +117,38 @@ async def find_recipient_by_name(name: str):
     """
     import urllib.parse
     
-    # First try exact match with the formatted name
     formatted = format_name(name)
-    filter_formula = f"LOWER({{Nom}})=LOWER('{formatted}')"
+    
+    # Strategy 1: Exact match on formatted name, ONLY "En attente" records
+    filter_formula = f"AND(LOWER({{Nom}})=LOWER('{formatted}'), {{Statuts}}='En attente')"
     encoded_filter = urllib.parse.quote(filter_formula)
     
     try:
         result = await airtable_request("GET", f"?filterByFormula={encoded_filter}")
         records = result.get("records", [])
         if records:
-            logger.info(f"Found exact match for '{formatted}'")
+            logger.info(f"Found exact 'En attente' match for '{formatted}'")
             return records[0]
     except Exception as e:
         logger.error(f"Error finding recipient (exact): {e}")
     
-    # Also try with the raw name (in case it was entered differently)
+    # Strategy 2: Raw name match, ONLY "En attente" records
     if name.strip().lower() != formatted.lower():
-        filter_formula2 = f"LOWER({{Nom}})=LOWER('{name.strip()}')"
+        filter_formula2 = f"AND(LOWER({{Nom}})=LOWER('{name.strip()}'), {{Statuts}}='En attente')"
         encoded_filter2 = urllib.parse.quote(filter_formula2)
         try:
             result = await airtable_request("GET", f"?filterByFormula={encoded_filter2}")
             records = result.get("records", [])
             if records:
-                logger.info(f"Found match for raw name '{name.strip()}'")
+                logger.info(f"Found raw 'En attente' match for '{name.strip()}'")
                 return records[0]
         except Exception as e:
             logger.error(f"Error finding recipient (raw): {e}")
     
-    # Last resort: search by individual name parts to handle order differences
-    # e.g., "Luck Nicolas" should match "NICOLAS Luck"
+    # Strategy 3: Search by individual name parts, ONLY "En attente" records
     parts = name.strip().split()
     if len(parts) >= 2:
-        # Search for records containing ALL parts of the name
-        # Build an AND filter: FIND('part1', LOWER(Nom)) > 0, FIND('part2', LOWER(Nom)) > 0
-        conditions = []
+        conditions = ["{Statuts}='En attente'"]
         for part in parts:
             part_clean = part.lower().replace("'", "\\'")
             conditions.append(f"FIND('{part_clean}', LOWER({{Nom}}))>0")
@@ -161,11 +160,12 @@ async def find_recipient_by_name(name: str):
             result = await airtable_request("GET", f"?filterByFormula={encoded_combined}")
             records = result.get("records", [])
             if records:
-                logger.info(f"Found partial match for parts {parts}: {records[0].get('fields', {}).get('Nom', '')}")
+                logger.info(f"Found partial 'En attente' match for parts {parts}: {records[0].get('fields', {}).get('Nom', '')}")
                 return records[0]
         except Exception as e:
             logger.error(f"Error finding recipient (parts): {e}")
     
+    logger.info(f"No 'En attente' record found for '{name}' -> will create new")
     return None
 
 def format_name(name: str) -> str:
@@ -378,13 +378,21 @@ async def update_recipient_count(record_id: str, current_note: str):
         }
     }
     
+    logger.info(f"PATCH Airtable record {record_id}: Note -> '{new_count}' (was: '{current_note}')")
+    
     async with aiohttp.ClientSession() as session:
         async with session.patch(url, headers=headers, json=data) as response:
+            response_json = await response.json()
             if response.status != 200:
-                error_text = await response.text()
-                logger.error(f"Airtable PATCH error: {error_text}")
+                error_text = str(response_json)
+                logger.error(f"Airtable PATCH error ({response.status}): {error_text}")
                 raise HTTPException(status_code=response.status, detail=f"Airtable error: {error_text}")
-            return await response.json(), new_count
+            
+            # Log the actual fields returned by Airtable to verify update
+            returned_fields = response_json.get("fields", {})
+            logger.info(f"Airtable PATCH response fields: Note='{returned_fields.get('Note', 'MISSING')}', Nom='{returned_fields.get('Nom', 'MISSING')}', Numéro={returned_fields.get('Numéro', 'MISSING')}")
+            
+            return response_json, new_count
 
 # API Routes
 @api_router.get("/")
