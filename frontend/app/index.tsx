@@ -49,11 +49,13 @@ export default function ScannerScreen() {
   const [lastResult, setLastResult] = useState<ScanResponse | null>(null);
   const [showResultModal, setShowResultModal] = useState(false);
   const [showListModal, setShowListModal] = useState(false);
+  const [showQuickInput, setShowQuickInput] = useState(false);
   const [packages, setPackages] = useState<PackageRecord[]>([]);
   const [scanMode, setScanMode] = useState<'photo' | 'manual'>('photo');
   const [isScanning, setIsScanning] = useState(false);
   
   const cameraRef = useRef<any>(null);
+  const quickInputRef = useRef<any>(null);
 
   useEffect(() => {
     Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
@@ -102,10 +104,9 @@ export default function ScannerScreen() {
         } else {
           await playSound(false);
           setIsScanning(false);
-          Alert.alert('Nom non trouvé', 'Réessayez ou utilisez le mode manuel', [
-            { text: 'OK' },
-            { text: 'Manuel', onPress: () => setScanMode('manual') }
-          ]);
+          // Show quick input modal instead of alert
+          setManualName('');
+          setShowQuickInput(true);
         }
       } else {
         setIsScanning(false);
@@ -151,7 +152,14 @@ export default function ScannerScreen() {
   const resetScanner = () => {
     setManualName('');
     setShowResultModal(false);
+    setShowQuickInput(false);
     setLastResult(null);
+  };
+
+  const submitQuickInput = async () => {
+    if (!manualName.trim()) return;
+    setShowQuickInput(false);
+    await processName(manualName);
   };
 
   const fetchPackages = async () => {
@@ -291,6 +299,43 @@ export default function ScannerScreen() {
         </View>
       </Modal>
 
+      {/* Quick Input Modal - When OCR fails */}
+      <Modal visible={showQuickInput} transparent animationType="slide">
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBg}>
+          <View style={styles.quickInputModal}>
+            <View style={styles.quickInputHeader}>
+              <Ionicons name="alert-circle" size={28} color="#FF9500" />
+              <Text style={styles.quickInputTitle}>Nom non détecté</Text>
+            </View>
+            <Text style={styles.quickInputSubtitle}>Tapez le nom manuellement</Text>
+            <TextInput
+              ref={quickInputRef}
+              style={styles.quickInputField}
+              placeholder="NOM Prénom"
+              placeholderTextColor="#999"
+              value={manualName}
+              onChangeText={setManualName}
+              autoCapitalize="characters"
+              autoFocus={true}
+              returnKeyType="done"
+              onSubmitEditing={submitQuickInput}
+            />
+            <View style={styles.quickInputBtns}>
+              <TouchableOpacity style={styles.quickInputCancel} onPress={() => { setShowQuickInput(false); setManualName(''); }}>
+                <Text style={styles.quickInputCancelText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.quickInputSubmit, !manualName.trim() && { opacity: 0.4 }]} 
+                onPress={submitQuickInput}
+                disabled={!manualName.trim() || isLoading}
+              >
+                {isLoading ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={styles.quickInputSubmitText}>OK</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       {/* List Modal */}
       <Modal visible={showListModal} animationType="slide">
         <SafeAreaView style={styles.listContainer}>
@@ -379,6 +424,16 @@ const styles = StyleSheet.create({
   colisText: { fontSize: 20, fontWeight: '700', color: '#007AFF' },
   nextBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#34C759', paddingHorizontal: 48, paddingVertical: 16, borderRadius: 30, gap: 10, shadowColor: '#34C759', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 6 },
   nextBtnText: { color: '#FFF', fontSize: 20, fontWeight: '800', letterSpacing: 1 },
+  quickInputModal: { backgroundColor: '#FFF', borderRadius: 20, padding: 24, width: '90%', alignItems: 'center' },
+  quickInputHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+  quickInputTitle: { fontSize: 20, fontWeight: '800', color: '#333' },
+  quickInputSubtitle: { fontSize: 14, color: '#888', marginBottom: 16 },
+  quickInputField: { width: '100%', backgroundColor: '#F5F5F5', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 22, fontWeight: '700', textAlign: 'center', borderWidth: 2, borderColor: '#FF9500', marginBottom: 16 },
+  quickInputBtns: { flexDirection: 'row', gap: 12, width: '100%' },
+  quickInputCancel: { flex: 1, backgroundColor: '#F0F0F0', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  quickInputCancelText: { color: '#666', fontSize: 16, fontWeight: '600' },
+  quickInputSubmit: { flex: 1, backgroundColor: '#34C759', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  quickInputSubmitText: { color: '#FFF', fontSize: 18, fontWeight: '800' },
   listContainer: { flex: 1, backgroundColor: '#F5F5F5' },
   listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' },
   listTitle: { fontSize: 20, fontWeight: 'bold', color: '#333' },
