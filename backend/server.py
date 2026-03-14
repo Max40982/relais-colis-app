@@ -617,6 +617,37 @@ async def get_all_packages():
         logger.error(f"Error fetching packages: {e}")
         raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
 
+@api_router.get("/suggest")
+async def suggest_names(q: str = ""):
+    """Suggest recipient names from Airtable based on partial input"""
+    if not q or len(q) < 2:
+        return []
+    
+    import urllib.parse
+    
+    try:
+        # Search all records where Nom contains the query (case insensitive)
+        filter_formula = f"FIND(LOWER('{q.strip()}'), LOWER({{Nom}}))>0"
+        encoded_filter = urllib.parse.quote(filter_formula)
+        
+        result = await airtable_request("GET", f"?filterByFormula={encoded_filter}&sort%5B0%5D%5Bfield%5D=Nom")
+        records = result.get("records", [])
+        
+        # Deduplicate names and return unique ones
+        seen = set()
+        names = []
+        for record in records:
+            name = record.get("fields", {}).get("Nom", "").strip()
+            name_lower = name.lower()
+            if name and name_lower not in seen:
+                seen.add(name_lower)
+                names.append(name)
+        
+        return names[:10]  # Max 10 suggestions
+    except Exception as e:
+        logger.error(f"Error suggesting names: {e}")
+        return []
+
 # Include the router in the main app
 app.include_router(api_router)
 

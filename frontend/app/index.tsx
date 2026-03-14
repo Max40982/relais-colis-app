@@ -50,6 +50,7 @@ export default function ScannerScreen() {
   const [showResultModal, setShowResultModal] = useState(false);
   const [showListModal, setShowListModal] = useState(false);
   const [showQuickInput, setShowQuickInput] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [packages, setPackages] = useState<PackageRecord[]>([]);
   const [scanMode, setScanMode] = useState<'photo' | 'manual'>('photo');
   const [isScanning, setIsScanning] = useState(false);
@@ -159,7 +160,39 @@ export default function ScannerScreen() {
   const submitQuickInput = async () => {
     if (!manualName.trim()) return;
     setShowQuickInput(false);
+    setSuggestions([]);
     await processName(manualName);
+  };
+
+  const searchTimeoutRef = useRef<any>(null);
+  
+  const onQuickInputChange = (text: string) => {
+    setManualName(text);
+    
+    // Debounce the search
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    
+    if (text.trim().length >= 2) {
+      searchTimeoutRef.current = setTimeout(async () => {
+        try {
+          const response = await fetch(`${BACKEND_URL}/api/suggest?q=${encodeURIComponent(text.trim())}`);
+          const names: string[] = await response.json();
+          setSuggestions(names);
+        } catch {
+          setSuggestions([]);
+        }
+      }, 200);
+    } else {
+      setSuggestions([]);
+    }
+  };
+
+  const selectSuggestion = (name: string) => {
+    setManualName(name);
+    setSuggestions([]);
+    // Auto-submit when selecting a suggestion
+    setShowQuickInput(false);
+    processName(name);
   };
 
   const fetchPackages = async () => {
@@ -314,14 +347,30 @@ export default function ScannerScreen() {
               placeholder="NOM Prénom"
               placeholderTextColor="#999"
               value={manualName}
-              onChangeText={setManualName}
+              onChangeText={onQuickInputChange}
               autoCapitalize="characters"
               autoFocus={true}
               returnKeyType="done"
               onSubmitEditing={submitQuickInput}
             />
+            {/* Suggestions list */}
+            {suggestions.length > 0 && (
+              <ScrollView style={styles.suggestionsContainer} keyboardShouldPersistTaps="handled">
+                {suggestions.map((name, index) => (
+                  <TouchableOpacity 
+                    key={index} 
+                    style={styles.suggestionItem} 
+                    onPress={() => selectSuggestion(name)}
+                    activeOpacity={0.6}
+                  >
+                    <Ionicons name="person" size={16} color="#007AFF" />
+                    <Text style={styles.suggestionText}>{name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
             <View style={styles.quickInputBtns}>
-              <TouchableOpacity style={styles.quickInputCancel} onPress={() => { setShowQuickInput(false); setManualName(''); }}>
+              <TouchableOpacity style={styles.quickInputCancel} onPress={() => { setShowQuickInput(false); setManualName(''); setSuggestions([]); }}>
                 <Text style={styles.quickInputCancelText}>Annuler</Text>
               </TouchableOpacity>
               <TouchableOpacity 
@@ -434,6 +483,9 @@ const styles = StyleSheet.create({
   quickInputCancelText: { color: '#666', fontSize: 16, fontWeight: '600' },
   quickInputSubmit: { flex: 1, backgroundColor: '#34C759', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
   quickInputSubmitText: { color: '#FFF', fontSize: 18, fontWeight: '800' },
+  suggestionsContainer: { width: '100%', maxHeight: 180, marginBottom: 12, borderRadius: 12, backgroundColor: '#F8F8F8', borderWidth: 1, borderColor: '#E5E5E5' },
+  suggestionItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: '#EEE' },
+  suggestionText: { fontSize: 18, fontWeight: '600', color: '#333' },
   listContainer: { flex: 1, backgroundColor: '#F5F5F5' },
   listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' },
   listTitle: { fontSize: 20, fontWeight: 'bold', color: '#333' },
