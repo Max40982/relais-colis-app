@@ -421,45 +421,94 @@ async def extract_name_from_image(request: OCRRequest):
         if ',' in image_base64:
             image_base64 = image_base64.split(',')[1]
         
-        # Initialize chat with vision model
-        # Use gpt-4o for vision
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"ocr-{uuid.uuid4()}",
-            system_message="Tu lis le TEXTE sur une étiquette de colis postal. Tu dois extraire le NOM DE FAMILLE et le PRÉNOM du destinataire. RÈGLES IMPORTANTES: 1) Sur les étiquettes de colis, le NOM DE FAMILLE est souvent en MAJUSCULES. 2) Réponds UNIQUEMENT au format: NOM_DE_FAMILLE Prénom (le nom de famille en MAJUSCULES suivi du prénom avec la première lettre en majuscule). 3) Si tu ne trouves pas de nom, réponds INCONNU. 4) Ne mets aucune explication, juste le nom."
+            system_message="Tu lis le TEXTE sur une étiquette de colis postal. Tu dois extraire le NOM DE FAMILLE et le PRÉNOM du destinataire. RÈGLES: 1) Sur les étiquettes, le NOM DE FAMILLE est en MAJUSCULES. 2) Réponds UNIQUEMENT avec: NOM_DE_FAMILLE Prénom (nom en MAJUSCULES, prénom en minuscule avec majuscule initiale). 3) Si pas de nom visible, réponds exactement: INCONNU. 4) Aucune explication, aucune phrase, juste le nom."
         ).with_model("openai", "gpt-4o")
         
-        # Create image content
         image_content = ImageContent(image_base64=image_base64)
-        
-        # Clear prompt
         user_message = UserMessage(
-            text="Lis cette étiquette de colis. Donne-moi le nom du destinataire au format: NOM_DE_FAMILLE Prénom (nom de famille en MAJUSCULES). Attention: le nom de famille est souvent celui écrit en majuscules sur l'étiquette.",
+            text="Lis cette étiquette de colis. Donne-moi UNIQUEMENT le nom du destinataire au format: NOM Prénom. Rien d'autre.",
             file_contents=[image_content]
         )
         
         response = await chat.send_message(user_message)
-        
         extracted_name = response.strip()
         
-        # Validate the extracted name - reject error messages
-        invalid_responses = ['inconnu', 'désolé', 'sorry', 'cannot', 'impossible', 'pas', 'identifier', 'aide']
-        extracted_lower = extracted_name.lower()
+        # Log the raw OCR response ALWAYS for debugging
+        logger.info(f"OCR raw response: '{extracted_name}'")
         
-        if not extracted_name or len(extracted_name) < 2 or any(word in extracted_lower for word in invalid_responses):
+        # Clean up: remove quotes, punctuation, extra whitespace
+        extracted_name = extracted_name.strip('"\'.,;:!?()[]{}').strip()
+        
+        # Remove explanatory text - take only first line
+        if '\n' in extracted_name:
+            extracted_name = extracted_name.split('\n')[0].strip()
+        
+        # Remove common prefixes the model might add
+        prefixes_to_remove = [
+            'le nom du destinataire est',
+            'le destinataire est',
+            'nom du destinataire:',
+            'nom du destinataire :',
+            'destinataire:',
+            'destinataire :',
+            'nom:',
+            'nom :',
+        ]
+        extracted_lower_check = extracted_name.lower().strip()
+        for prefix in prefixes_to_remove:
+            if extracted_lower_check.startswith(prefix):
+                extracted_name = extracted_name[len(prefix):].strip()
+                extracted_name = extracted_name.strip('"\'.,;:!?').strip()
+                break
+        
+        # Validate: reject only clear failure responses (full phrase matching)
+        invalid_phrases = [
+            'inconnu',
+            'je ne peux',
+            'je ne suis pas en mesure',
+            'i cannot',
+            'i can\'t',
+            'impossible de',
+            'pas de nom',
+            'aucun nom',
+            'no name',
+            'not able to',
+            'unable to',
+            'désolé',
+            'sorry',
+            'il n\'y a pas',
+            'je n\'arrive pas',
+            'image ne contient',
+            'pas lisible',
+            'illisible',
+        ]
+        
+        extracted_lower = extracted_name.lower().strip()
+        
+        is_invalid = (
+            not extracted_name 
+            or len(extracted_name) < 2
+            or extracted_lower == 'inconnu'
+            or any(phrase in extracted_lower for phrase in invalid_phrases)
+            or len(extracted_name) > 80  # Too long = probably explanatory text
+        )
+        
+        if is_invalid:
+            logger.info(f"OCR rejected response: '{extracted_name}'")
             return OCRResponse(
                 success=False,
                 name=None,
                 raw_text=extracted_name,
-                message="Impossible de trouver le nom du destinataire sur l'étiquette"
+                message="Nom non trouvé sur l'étiquette. Réessayez ou mode manuel."
             )
         
-        # Clean up the name (remove quotes, extra spaces, punctuation)
-        extracted_name = extracted_name.strip('"\'.,;:!?').strip()
-        
-        # Remove any explanatory text (take only first line or before comma)
-        if '\n' in extracted_name:
-            extracted_name = extracted_name.split('\n')[0].strip()
+        # Final cleanup: ensure no extra words after the name (max 4 words for a name)
+        words = extracted_name.split()
+        if len(words) > 4:
+            extracted_name = ' '.join(words[:3])  # Take first 3 words max
         
         logger.info(f"OCR extracted name: {extracted_name}")
         
