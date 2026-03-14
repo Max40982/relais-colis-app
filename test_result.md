@@ -134,6 +134,9 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ Scan endpoint fully tested and working perfectly. Successfully creates new recipients (tested with 'Dupont Marie' → 'DUPONT Marie', numero 8, is_new:true, package_count:1) and updates existing recipients (second scan incremented to package_count:2, is_new:false). Name formatting, Airtable integration, and numero assignment all working correctly."
+        - working: true
+          agent: "testing"
+          comment: "✅ IMPROVED NAME FORMATTING TESTED: (1) 'NICOLAS Luck' correctly handled as ALL CAPS name detection - found existing record with 3 packages (2) 'Luck Nicolas' properly searches and finds different record 'LUCK Nicolas' with 6 packages via partial matching (3) 'Dupont Marie' correctly formatted as 'DUPONT Marie' and updated to 3 packages (4) New records get Note='1' confirmed with test name 'TESTNOM Testprenom'. All name formatting strategies working perfectly - ALL CAPS detection, dictionary lookup, and partial name search."
 
   - task: "GET /api/packages - Fetch all pending packages"
     implemented: true
@@ -180,6 +183,10 @@ test_plan:
 
 agent_communication:
     - agent: "main"
-      message: "Merged the two post-scan screens (name confirmation + result) into a single unified result screen. After OCR, the name is now directly processed with Airtable (no confirmation step). The single result screen shows: NOM PRENOM, N° (big), nombre de colis, and a SUIVANT button. Please test all 3 backend endpoints to verify they work after the fork. Backend URL is https://relay-scan-app.preview.emergentagent.com. All API routes are prefixed with /api."
+      message: "Merged the two post-scan screens into one. Now fixing name inversion and Airtable search bugs."
+    - agent: "main"
+      message: "Fixed 3 major backend issues: 1) Improved OCR prompt to ask for NOM_DE_FAMILLE in CAPS followed by Prénom. 2) Improved format_name to respect ALL CAPS words from OCR as last name (strategy 1), then use dictionary (strategy 2), then default first word = last name. 3) Improved find_recipient_by_name to search by: exact formatted name, raw name, AND individual name parts (handles name order differences like 'Luck Nicolas' matching 'NICOLAS Luck'). 4) Added Note='1' when creating new records. Test: POST /api/scan with names like 'Luck Nicolas', 'NICOLAS Luck', 'Dupont Marie'. Backend URL: https://relay-scan-app.preview.emergentagent.com. All API routes prefixed with /api."
     - agent: "testing"
       message: "✅ BACKEND TESTING COMPLETED - ALL 3 ENDPOINTS WORKING PERFECTLY: (1) POST /api/scan - Creates new recipients and updates existing ones correctly, tested with real Airtable integration (2) POST /api/ocr - Handles both valid and invalid images properly, returns structured responses (3) GET /api/packages - Successfully retrieves 15 pending packages from Airtable. Health endpoint shows Airtable fully configured. All endpoints respond correctly with proper JSON structures. Backend is production-ready. Created comprehensive backend_test.py for future testing."
+    - agent: "testing"
+      message: "✅ IMPROVED NAME FORMATTING VERIFICATION COMPLETE: All specific test cases from review request confirmed working: (1) 'NICOLAS Luck' → correctly keeps ALL CAPS detection and finds existing record with 3 packages (2) 'Luck Nicolas' → finds different record 'LUCK Nicolas' via partial search with 6 packages (3) 'Dupont Marie' → correctly formats as 'DUPONT Marie' and updates to 3 packages (4) New records confirmed to set Note='1' (tested with 'TESTNOM TestPrenom'). All 3 name formatting strategies working: ALL CAPS detection, French name dictionary, and partial matching for name order variations. GET /api/packages retrieves 16 pending packages correctly."

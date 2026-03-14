@@ -108,27 +108,106 @@ async def airtable_request(method: str, endpoint: str, data: dict = None):
                 return await response.json()
 
 async def find_recipient_by_name(name: str):
-    """Find a recipient by name in Airtable (case insensitive)"""
+    """Find a recipient by name in Airtable (case insensitive, handles name order).
+    
+    Searches by:
+    1. Exact formatted name match
+    2. Individual name parts (to handle order differences like 'LUCK Nicolas' vs 'NICOLAS Luck')
+    """
     import urllib.parse
     
-    # Use LOWER() for case-insensitive search
-    filter_formula = f"LOWER({{Nom}})=LOWER('{name}')"
+    # First try exact match with the formatted name
+    formatted = format_name(name)
+    filter_formula = f"LOWER({{Nom}})=LOWER('{formatted}')"
     encoded_filter = urllib.parse.quote(filter_formula)
     
     try:
         result = await airtable_request("GET", f"?filterByFormula={encoded_filter}")
         records = result.get("records", [])
         if records:
+            logger.info(f"Found exact match for '{formatted}'")
             return records[0]
-        return None
     except Exception as e:
-        logger.error(f"Error finding recipient: {e}")
-        return None
+        logger.error(f"Error finding recipient (exact): {e}")
+    
+    # Also try with the raw name (in case it was entered differently)
+    if name.strip().lower() != formatted.lower():
+        filter_formula2 = f"LOWER({{Nom}})=LOWER('{name.strip()}')"
+        encoded_filter2 = urllib.parse.quote(filter_formula2)
+        try:
+            result = await airtable_request("GET", f"?filterByFormula={encoded_filter2}")
+            records = result.get("records", [])
+            if records:
+                logger.info(f"Found match for raw name '{name.strip()}'")
+                return records[0]
+        except Exception as e:
+            logger.error(f"Error finding recipient (raw): {e}")
+    
+    # Last resort: search by individual name parts to handle order differences
+    # e.g., "Luck Nicolas" should match "NICOLAS Luck"
+    parts = name.strip().split()
+    if len(parts) >= 2:
+        # Search for records containing ALL parts of the name
+        # Build an AND filter: FIND('part1', LOWER(Nom)) > 0, FIND('part2', LOWER(Nom)) > 0
+        conditions = []
+        for part in parts:
+            part_clean = part.lower().replace("'", "\\'")
+            conditions.append(f"FIND('{part_clean}', LOWER({{Nom}}))>0")
+        
+        combined_filter = "AND(" + ",".join(conditions) + ")"
+        encoded_combined = urllib.parse.quote(combined_filter)
+        
+        try:
+            result = await airtable_request("GET", f"?filterByFormula={encoded_combined}")
+            records = result.get("records", [])
+            if records:
+                logger.info(f"Found partial match for parts {parts}: {records[0].get('fields', {}).get('Nom', '')}")
+                return records[0]
+        except Exception as e:
+            logger.error(f"Error finding recipient (parts): {e}")
+    
+    return None
 
 def format_name(name: str) -> str:
-    """Format name as 'NOM Prénom' - surname uppercase, firstname capitalized"""
+    """Format name as 'NOM Prénom' - surname uppercase, firstname capitalized.
     
-    # Liste de prénoms français courants (pour éviter de les confondre avec des noms)
+    Strategy:
+    1. If OCR returned a word in ALL CAPS → that's the last name
+    2. Otherwise, check against known French first names
+    3. Last resort: assume first word is last name (French label convention)
+    """
+    
+    parts = name.strip().split()
+    if len(parts) == 0:
+        return name
+    elif len(parts) == 1:
+        return parts[0].upper()
+    
+    # Strategy 1: Check if any word is already ALL CAPS (from OCR/label)
+    # This is the strongest signal - on French labels, last name is in CAPS
+    all_caps_indices = [i for i, p in enumerate(parts) if p.isupper() and len(p) > 1]
+    mixed_case_indices = [i for i, p in enumerate(parts) if not p.isupper() or len(p) <= 1]
+    
+    if all_caps_indices and mixed_case_indices:
+        # Clear signal: CAPS words = last name, others = first name
+        surname = ' '.join([parts[i].upper() for i in all_caps_indices])
+        firstname = ' '.join([parts[i].capitalize() for i in mixed_case_indices])
+        return f"{surname} {firstname}".strip()
+    
+    # Strategy 2: Load extended first names list if available
+    firstnames_set = set()
+    try:
+        prenoms_path = ROOT_DIR / 'data' / 'prenoms.txt'
+        if prenoms_path.exists():
+            with open(prenoms_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip().lower()
+                    if line:
+                        firstnames_set.add(line)
+    except Exception:
+        pass
+    
+    # Add common first names inline as fallback
     COMMON_FIRSTNAMES = {
         'jean', 'pierre', 'marie', 'anne', 'paul', 'louis', 'jacques', 'michel',
         'philippe', 'alain', 'bernard', 'patrick', 'daniel', 'nicolas', 'stephane',
@@ -144,7 +223,7 @@ def format_name(name: str) -> str:
         'jonathan', 'ludovic', 'marc', 'matthieu', 'mickael', 'mickaël', 'morgan',
         'quentin', 'raphael', 'raphaël', 'remi', 'rémi', 'samuel', 'sylvain', 'xavier',
         'yann', 'yoann', 'charlotte', 'clara', 'clemence', 'clémence', 'emma', 'lea',
-        'léa', 'lucie', 'manon', 'margot', 'marie', 'oceane', 'océane', 'pauline',
+        'léa', 'lucie', 'manon', 'margot', 'oceane', 'océane', 'pauline',
         'sarah', 'amandine', 'audrey', 'laetitia', 'laëtitia', 'laura', 'marie-pierre',
         'patricia', 'virginie', 'alexandra', 'alexia', 'amelie', 'amélie', 'anais',
         'anaïs', 'angélique', 'angelique', 'aurore', 'carole', 'charline', 'cindy',
@@ -165,57 +244,40 @@ def format_name(name: str) -> str:
         'sacha', 'simon', 'thibault', 'thibaut', 'timeo', 'timéo', 'alexia', 'lina',
         'ines', 'inès', 'jade', 'lena', 'léna', 'lilou', 'maëlle', 'maelle', 'mila',
         'noemie', 'noémie', 'romane', 'rose', 'zoe', 'zoé', 'alice', 'anna', 'chloe',
-        'chloé', 'elena', 'eléna', 'elsa', 'lily', 'louna', 'luna', 'louise', 'maya',
-        # Prénoms composés courants
+        'chloé', 'elena', 'eléna', 'elsa', 'lily', 'louna', 'luna', 'maya',
         'jean-pierre', 'jean-paul', 'jean-louis', 'jean-marc', 'jean-claude',
         'jean-philippe', 'jean-michel', 'jean-francois', 'jean-françois',
         'marie-claire', 'marie-france', 'marie-helene', 'marie-hélène',
         'anne-marie', 'anne-sophie', 'anne-laure',
     }
+    firstnames_set.update(COMMON_FIRSTNAMES)
     
-    parts = name.strip().split()
-    if len(parts) == 0:
-        return name
-    elif len(parts) == 1:
-        return parts[0].upper()
-    
-    # Convertir en minuscules pour comparaison
     parts_lower = [p.lower() for p in parts]
     
-    # Chercher quel mot est un prénom connu
-    firstname_idx = -1
-    surname_idx = -1
+    # Check which parts are known first names
+    firstname_matches = [i for i, p in enumerate(parts_lower) if p in firstnames_set]
+    non_firstname_matches = [i for i in range(len(parts)) if i not in firstname_matches]
     
-    for i, p_lower in enumerate(parts_lower):
-        if p_lower in COMMON_FIRSTNAMES:
-            firstname_idx = i
-            break
-    
-    if firstname_idx >= 0:
-        # On a trouvé un prénom - le reste est le nom de famille
-        firstname = parts[firstname_idx].capitalize()
-        surname_parts = [parts[j].upper() for j in range(len(parts)) if j != firstname_idx]
-        surname = ' '.join(surname_parts)
+    if len(firstname_matches) == 1 and len(non_firstname_matches) >= 1:
+        # Exactly one word is a known first name, the rest is last name
+        firstname = parts[firstname_matches[0]].capitalize()
+        surname = ' '.join([parts[i].upper() for i in non_firstname_matches])
         return f"{surname} {firstname}".strip()
     
-    # Pas de prénom trouvé dans la liste - utiliser l'ancienne logique
-    # Chercher si un mot est en majuscules (probablement le nom)
-    uppercase_idx = -1
-    for i, part in enumerate(parts):
-        if part.isupper() and len(part) > 1:
-            uppercase_idx = i
-            break
+    if len(firstname_matches) == 0 or len(firstname_matches) == len(parts):
+        # No clear signal from dictionary - all or none are first names
+        # Use French label convention: first word = last name
+        surname = parts[0].upper()
+        firstname = ' '.join([p.capitalize() for p in parts[1:]])
+        return f"{surname} {firstname}".strip()
     
-    if uppercase_idx >= 0:
-        surname = parts[uppercase_idx].upper()
-        firstname_parts = [p.capitalize() for j, p in enumerate(parts) if j != uppercase_idx]
-        firstname = ' '.join(firstname_parts)
-        return f"{surname} {firstname}".strip()
-    else:
-        # Assumer que le dernier mot est le nom (convention française)
-        surname = parts[-1].upper()
-        firstname = ' '.join([p.capitalize() for p in parts[:-1]])
-        return f"{surname} {firstname}".strip()
+    # Multiple matches - take the LAST firstname match as the actual first name
+    # (on French labels, last name usually comes first)
+    firstname_idx = firstname_matches[-1]
+    firstname = parts[firstname_idx].capitalize()
+    surname_parts = [parts[j].upper() for j in range(len(parts)) if j != firstname_idx]
+    surname = ' '.join(surname_parts)
+    return f"{surname} {firstname}".strip()
 
 async def get_next_numero():
     """Get the next available unique numero (finds first gap - only counts 'En attente' status)"""
@@ -284,7 +346,8 @@ async def create_recipient(name: str):
             "fields": {
                 "Nom": formatted_name,
                 "Numéro": next_numero,
-                "Statuts": "En attente"
+                "Statuts": "En attente",
+                "Note": "1"
             }
         }]
     }
@@ -355,7 +418,7 @@ async def extract_name_from_image(request: OCRRequest):
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"ocr-{uuid.uuid4()}",
-            system_message="Tu lis le TEXTE sur une étiquette de colis. Extrait le nom du destinataire écrit sur l'étiquette. Réponds uniquement avec le nom (format: NOM Prénom). Si pas de nom visible, réponds INCONNU."
+            system_message="Tu lis le TEXTE sur une étiquette de colis postal. Tu dois extraire le NOM DE FAMILLE et le PRÉNOM du destinataire. RÈGLES IMPORTANTES: 1) Sur les étiquettes de colis, le NOM DE FAMILLE est souvent en MAJUSCULES. 2) Réponds UNIQUEMENT au format: NOM_DE_FAMILLE Prénom (le nom de famille en MAJUSCULES suivi du prénom avec la première lettre en majuscule). 3) Si tu ne trouves pas de nom, réponds INCONNU. 4) Ne mets aucune explication, juste le nom."
         ).with_model("openai", "gpt-4o")
         
         # Create image content
@@ -363,7 +426,7 @@ async def extract_name_from_image(request: OCRRequest):
         
         # Clear prompt
         user_message = UserMessage(
-            text="Lis le texte sur cette étiquette de colis et donne-moi le nom du destinataire.",
+            text="Lis cette étiquette de colis. Donne-moi le nom du destinataire au format: NOM_DE_FAMILLE Prénom (nom de famille en MAJUSCULES). Attention: le nom de famille est souvent celui écrit en majuscules sur l'étiquette.",
             file_contents=[image_content]
         )
         

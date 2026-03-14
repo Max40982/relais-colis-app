@@ -49,40 +49,72 @@ def test_endpoint(method: str, endpoint: str, data: Dict[Any, Any] = None) -> Di
         }
 
 def test_scan_endpoint():
-    """Test POST /api/scan endpoint"""
+    """Test POST /api/scan endpoint with specific name formatting scenarios"""
     print("\n=== Testing POST /api/scan ===")
     
-    # Test with a realistic French name
-    test_data = {"name": "Dupont Marie"}
+    test_cases = [
+        {
+            "name": "NICOLAS Luck",
+            "description": "Name with ALL CAPS last name",
+            "expected_format": "NICOLAS Luck"
+        },
+        {
+            "name": "Luck Nicolas", 
+            "description": "Name with mixed case (ambiguous)",
+            "expected_format": "Should find existing records for both name orders"
+        },
+        {
+            "name": "Dupont Marie",
+            "description": "Simple case with known first name",
+            "expected_format": "DUPONT Marie"
+        }
+    ]
     
-    result = test_endpoint("POST", "/scan", test_data)
+    all_success = True
     
-    print(f"Status Code: {result['status_code']}")
-    print(f"Success: {result['success']}")
+    for i, test_case in enumerate(test_cases, 1):
+        print(f"\n--- Test {i}: {test_case['description']} ---")
+        print(f"Testing with: '{test_case['name']}'")
+        print(f"Expected: {test_case['expected_format']}")
+        
+        test_data = {"name": test_case['name']}
+        result = test_endpoint("POST", "/scan", test_data)
+        
+        print(f"Status Code: {result['status_code']}")
+        print(f"Success: {result['success']}")
+        
+        if result['success']:
+            data = result['data']
+            print(f"Response: {json.dumps(data, indent=2, ensure_ascii=False)}")
+            
+            # Validate expected fields
+            expected_fields = ['success', 'name', 'is_new', 'package_count', 'numero']
+            missing_fields = [field for field in expected_fields if field not in data]
+            
+            if missing_fields:
+                print(f"⚠️  Missing expected fields: {missing_fields}")
+                all_success = False
+                continue
+            
+            # Report the results for this specific test
+            print(f"✅ Formatted Name: {data['name']}")
+            print(f"✅ Is New: {data['is_new']}")
+            print(f"✅ Package Count: {data['package_count']}")
+            print(f"✅ Numero: {data['numero']}")
+            
+            # Check if Note field is set to "1" for new records
+            if data.get('is_new'):
+                print(f"✅ New record created - Note should be set to '1'")
+            else:
+                print(f"✅ Existing record updated - Package count incremented")
+                
+        else:
+            print(f"❌ Error: {result['error']}")
+            if result['data']:
+                print(f"Response: {json.dumps(result['data'], indent=2, ensure_ascii=False)}")
+            all_success = False
     
-    if result['success']:
-        data = result['data']
-        print(f"Response: {json.dumps(data, indent=2, ensure_ascii=False)}")
-        
-        # Validate expected fields
-        expected_fields = ['success', 'name', 'is_new', 'package_count', 'numero']
-        missing_fields = [field for field in expected_fields if field not in data]
-        
-        if missing_fields:
-            print(f"⚠️  Missing expected fields: {missing_fields}")
-            return False
-        
-        print(f"✅ Name: {data['name']}")
-        print(f"✅ Is New: {data['is_new']}")
-        print(f"✅ Package Count: {data['package_count']}")
-        print(f"✅ Numero: {data['numero']}")
-        
-        return True
-    else:
-        print(f"❌ Error: {result['error']}")
-        if result['data']:
-            print(f"Response: {json.dumps(result['data'], indent=2, ensure_ascii=False)}")
-        return False
+    return all_success
 
 def test_ocr_endpoint():
     """Test POST /api/ocr endpoint"""
