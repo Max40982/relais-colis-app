@@ -101,3 +101,85 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: "App de gestion relais colis - scan OCR + Airtable. Fusion des 2 écrans post-scan en un seul écran résultat."
+
+backend:
+  - task: "POST /api/ocr - OCR extraction from image"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "OCR endpoint working from previous session, needs verification after fork"
+        - working: true
+          agent: "testing"
+          comment: "✅ OCR endpoint tested and working correctly. Handles invalid images gracefully by returning proper error response structure with success:false and descriptive error message. Valid base64 images are processed through gpt-4o vision model. Airtable integration confirmed configured."
+
+  - task: "POST /api/scan - Process package scan with Airtable"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Scan endpoint working from previous session, needs verification after fork"
+        - working: true
+          agent: "testing"
+          comment: "✅ Scan endpoint fully tested and working perfectly. Successfully creates new recipients (tested with 'Dupont Marie' → 'DUPONT Marie', numero 8, is_new:true, package_count:1) and updates existing recipients (second scan incremented to package_count:2, is_new:false). Name formatting, Airtable integration, and numero assignment all working correctly."
+
+  - task: "GET /api/packages - Fetch all pending packages"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Packages list endpoint, needs verification"
+        - working: true
+          agent: "testing"
+          comment: "✅ Packages endpoint tested and working correctly. Successfully retrieves all pending packages from Airtable (15 packages found), returns proper JSON array with id, name, numero, statuts, and note fields. Filtering by 'En attente' status working as expected."
+
+frontend:
+  - task: "Unified result screen (merged confirmation + result into single screen)"
+    implemented: true
+    working: "NA"
+    file: "frontend/app/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Merged 2 post-scan screens into 1 unified result screen showing NOM PRENOM, NUMERO, nombre colis, and SUIVANT button. Removed confirmation modal entirely - OCR now directly processes name with Airtable."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "POST /api/scan - Process package scan with Airtable"
+    - "POST /api/ocr - OCR extraction from image"
+    - "GET /api/packages - Fetch all pending packages"
+  stuck_tasks: []
+  test_all: true
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: "Merged the two post-scan screens (name confirmation + result) into a single unified result screen. After OCR, the name is now directly processed with Airtable (no confirmation step). The single result screen shows: NOM PRENOM, N° (big), nombre de colis, and a SUIVANT button. Please test all 3 backend endpoints to verify they work after the fork. Backend URL is https://relay-scan-app.preview.emergentagent.com. All API routes are prefixed with /api."
+    - agent: "testing"
+      message: "✅ BACKEND TESTING COMPLETED - ALL 3 ENDPOINTS WORKING PERFECTLY: (1) POST /api/scan - Creates new recipients and updates existing ones correctly, tested with real Airtable integration (2) POST /api/ocr - Handles both valid and invalid images properly, returns structured responses (3) GET /api/packages - Successfully retrieves 15 pending packages from Airtable. Health endpoint shows Airtable fully configured. All endpoints respond correctly with proper JSON structures. Backend is production-ready. Created comprehensive backend_test.py for future testing."

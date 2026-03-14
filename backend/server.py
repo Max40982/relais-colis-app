@@ -351,19 +351,19 @@ async def extract_name_from_image(request: OCRRequest):
             image_base64 = image_base64.split(',')[1]
         
         # Initialize chat with vision model
-        # Use gpt-4o for vision (fast enough with short prompt)
+        # Use gpt-4o for vision
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
             session_id=f"ocr-{uuid.uuid4()}",
-            system_message="Extrait NOM Prénom. NOM en MAJUSCULES. Ex: DUPONT Jean"
+            system_message="Tu lis le TEXTE sur une étiquette de colis. Extrait le nom du destinataire écrit sur l'étiquette. Réponds uniquement avec le nom (format: NOM Prénom). Si pas de nom visible, réponds INCONNU."
         ).with_model("openai", "gpt-4o")
         
         # Create image content
         image_content = ImageContent(image_base64=image_base64)
         
-        # Ultra short prompt
+        # Clear prompt
         user_message = UserMessage(
-            text="Nom?",
+            text="Lis le texte sur cette étiquette de colis et donne-moi le nom du destinataire.",
             file_contents=[image_content]
         )
         
@@ -371,8 +371,11 @@ async def extract_name_from_image(request: OCRRequest):
         
         extracted_name = response.strip()
         
-        # Validate the extracted name
-        if not extracted_name or extracted_name.upper() == "INCONNU" or len(extracted_name) < 2:
+        # Validate the extracted name - reject error messages
+        invalid_responses = ['inconnu', 'désolé', 'sorry', 'cannot', 'impossible', 'pas', 'identifier', 'aide']
+        extracted_lower = extracted_name.lower()
+        
+        if not extracted_name or len(extracted_name) < 2 or any(word in extracted_lower for word in invalid_responses):
             return OCRResponse(
                 success=False,
                 name=None,
@@ -380,8 +383,12 @@ async def extract_name_from_image(request: OCRRequest):
                 message="Impossible de trouver le nom du destinataire sur l'étiquette"
             )
         
-        # Clean up the name (remove quotes, extra spaces)
-        extracted_name = extracted_name.strip('"\'').strip()
+        # Clean up the name (remove quotes, extra spaces, punctuation)
+        extracted_name = extracted_name.strip('"\'.,;:!?').strip()
+        
+        # Remove any explanatory text (take only first line or before comma)
+        if '\n' in extracted_name:
+            extracted_name = extracted_name.split('\n')[0].strip()
         
         logger.info(f"OCR extracted name: {extracted_name}")
         

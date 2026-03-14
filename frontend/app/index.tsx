@@ -51,7 +51,6 @@ export default function ScannerScreen() {
   const [showListModal, setShowListModal] = useState(false);
   const [packages, setPackages] = useState<PackageRecord[]>([]);
   const [scanMode, setScanMode] = useState<'photo' | 'manual'>('photo');
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   
   const cameraRef = useRef<any>(null);
@@ -83,7 +82,7 @@ export default function ScannerScreen() {
     try {
       const photo = await cameraRef.current.takePictureAsync({
         base64: true,
-        quality: 0.1, // Minimum quality for max speed
+        quality: 0.1,
         skipProcessing: true,
       });
       
@@ -97,22 +96,24 @@ export default function ScannerScreen() {
         const result: OCRResponse = await response.json();
         
         if (result.success && result.name) {
-          await playSound(true);
-          setManualName(result.name);
-          setShowConfirmModal(true);
+          // Directly process the name - no confirmation step
+          setIsScanning(false);
+          await processName(result.name);
         } else {
           await playSound(false);
+          setIsScanning(false);
           Alert.alert('Nom non trouvé', 'Réessayez ou utilisez le mode manuel', [
             { text: 'OK' },
             { text: 'Manuel', onPress: () => setScanMode('manual') }
           ]);
         }
+      } else {
+        setIsScanning(false);
       }
     } catch (error) {
       await playSound(false);
-      Alert.alert('Erreur', 'Problème de connexion');
-    } finally {
       setIsScanning(false);
+      Alert.alert('Erreur', 'Problème de connexion');
     }
   };
 
@@ -120,7 +121,6 @@ export default function ScannerScreen() {
     if (!name.trim()) return;
     
     setIsLoading(true);
-    setShowConfirmModal(false);
 
     try {
       const response = await fetch(`${BACKEND_URL}/api/scan`, {
@@ -254,52 +254,38 @@ export default function ScannerScreen() {
         </KeyboardAvoidingView>
       )}
 
-      {/* Confirm Modal */}
-      <Modal visible={showConfirmModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
-          <View style={styles.modal}>
-            <Ionicons name="checkmark-circle" size={50} color="#34C759" />
-            <Text style={styles.modalTitle}>Nom Détecté</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={manualName}
-              onChangeText={setManualName}
-              autoCapitalize="words"
-              autoFocus
-            />
-            <View style={styles.modalBtns}>
-              <TouchableOpacity style={styles.modalBtnCancel} onPress={() => { setShowConfirmModal(false); setManualName(''); }}>
-                <Text style={styles.modalBtnCancelText}>Réessayer</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalBtnConfirm} onPress={() => processName(manualName)} disabled={isLoading}>
-                {isLoading ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={styles.modalBtnConfirmText}>Valider</Text>}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Result Modal - With Big Numero */}
+      {/* Result Modal - Single unified screen */}
       <Modal visible={showResultModal} transparent animationType="fade">
         <View style={styles.modalBg}>
           <View style={[styles.modal, styles.resultModal]}>
-            <View style={[styles.resultIcon, lastResult?.is_new ? styles.iconNew : styles.iconUpdate]}>
-              <Ionicons name={lastResult?.is_new ? 'person-add' : 'refresh'} size={36} color="#FFF" />
+            {/* Status badge */}
+            <View style={[styles.statusBadge, lastResult?.is_new ? styles.badgeNew : styles.badgeUpdate]}>
+              <Ionicons name={lastResult?.is_new ? 'person-add' : 'refresh'} size={16} color="#FFF" />
+              <Text style={styles.statusBadgeText}>{lastResult?.is_new ? 'Nouveau' : 'Mis à jour'}</Text>
             </View>
-            
-            <Text style={styles.resultLabel}>{lastResult?.is_new ? 'Nouveau' : 'Mis à jour'}</Text>
+
+            {/* NOM PRENOM - Big and clear */}
             <Text style={styles.resultName}>{lastResult?.name}</Text>
-            <Text style={styles.resultCount}>{lastResult?.package_count} colis</Text>
-            
-            {/* Big Numero Display */}
+
+            {/* Separator */}
+            <View style={styles.separator} />
+
+            {/* NUMERO - Very big */}
             <View style={styles.numeroContainer}>
               <Text style={styles.numeroLabel}>N°</Text>
               <Text style={styles.numeroValue}>{lastResult?.numero}</Text>
             </View>
-            
-            <TouchableOpacity style={styles.resultBtn} onPress={resetScanner}>
-              <Ionicons name="scan" size={20} color="#FFF" />
-              <Text style={styles.resultBtnText}>Suivant</Text>
+
+            {/* Nombre de colis */}
+            <View style={styles.colisContainer}>
+              <Ionicons name="cube" size={22} color="#007AFF" />
+              <Text style={styles.colisText}>{lastResult?.package_count} colis</Text>
+            </View>
+
+            {/* Bouton Suivant */}
+            <TouchableOpacity style={styles.nextBtn} onPress={resetScanner} activeOpacity={0.7}>
+              <Text style={styles.nextBtnText}>SUIVANT</Text>
+              <Ionicons name="arrow-forward" size={22} color="#FFF" />
             </TouchableOpacity>
           </View>
         </View>
@@ -369,35 +355,30 @@ const styles = StyleSheet.create({
   submitBtn: { backgroundColor: '#34C759', paddingHorizontal: 40, paddingVertical: 14, borderRadius: 25 },
   submitBtnDisabled: { backgroundColor: '#CCC' },
   submitBtnText: { color: '#FFF', fontSize: 18, fontWeight: '600' },
-  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
-  modal: { backgroundColor: '#FFF', borderRadius: 20, padding: 24, width: '85%', alignItems: 'center' },
-  modalTitle: { fontSize: 22, fontWeight: 'bold', color: '#333', marginTop: 8, marginBottom: 16 },
-  modalInput: { width: '100%', backgroundColor: '#F5F5F5', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 20, fontWeight: '600', textAlign: 'center', borderWidth: 2, borderColor: '#007AFF', marginBottom: 16 },
-  modalBtns: { flexDirection: 'row', gap: 12, width: '100%' },
-  modalBtnCancel: { flex: 1, backgroundColor: '#F0F0F0', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-  modalBtnCancelText: { color: '#666', fontSize: 16, fontWeight: '600' },
-  modalBtnConfirm: { flex: 1, backgroundColor: '#34C759', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-  modalBtnConfirmText: { color: '#FFF', fontSize: 16, fontWeight: '600' },
-  resultModal: { alignItems: 'center' },
-  resultIcon: { width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
-  iconNew: { backgroundColor: '#34C759' },
-  iconUpdate: { backgroundColor: '#007AFF' },
-  resultLabel: { fontSize: 14, color: '#666', marginBottom: 2 },
-  resultName: { fontSize: 22, fontWeight: 'bold', color: '#333', marginBottom: 4 },
-  resultCount: { fontSize: 16, color: '#666', marginBottom: 12 },
+  modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
+  modal: { backgroundColor: '#FFF', borderRadius: 24, padding: 28, width: '88%', alignItems: 'center' },
+  resultModal: { alignItems: 'center', paddingVertical: 32 },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, marginBottom: 16, gap: 6 },
+  badgeNew: { backgroundColor: '#34C759' },
+  badgeUpdate: { backgroundColor: '#007AFF' },
+  statusBadgeText: { color: '#FFF', fontSize: 13, fontWeight: '700' },
+  resultName: { fontSize: 28, fontWeight: '800', color: '#1A1A1A', textAlign: 'center', marginBottom: 12, letterSpacing: 0.5 },
+  separator: { width: '80%', height: 1, backgroundColor: '#E5E5E5', marginBottom: 16 },
   numeroContainer: { 
     flexDirection: 'row', 
     alignItems: 'center', 
     backgroundColor: '#007AFF', 
-    paddingHorizontal: 24, 
-    paddingVertical: 12, 
-    borderRadius: 16,
-    marginBottom: 16,
+    paddingHorizontal: 32, 
+    paddingVertical: 14, 
+    borderRadius: 18,
+    marginBottom: 14,
   },
-  numeroLabel: { fontSize: 24, fontWeight: 'bold', color: '#FFF', marginRight: 8 },
-  numeroValue: { fontSize: 48, fontWeight: 'bold', color: '#FFF' },
-  resultBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#34C759', paddingHorizontal: 28, paddingVertical: 14, borderRadius: 25, gap: 8 },
-  resultBtnText: { color: '#FFF', fontSize: 18, fontWeight: '600' },
+  numeroLabel: { fontSize: 28, fontWeight: '800', color: '#FFF', marginRight: 8 },
+  numeroValue: { fontSize: 56, fontWeight: '900', color: '#FFF' },
+  colisContainer: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 24, backgroundColor: '#F0F7FF', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12 },
+  colisText: { fontSize: 20, fontWeight: '700', color: '#007AFF' },
+  nextBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#34C759', paddingHorizontal: 48, paddingVertical: 16, borderRadius: 30, gap: 10, shadowColor: '#34C759', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 6 },
+  nextBtnText: { color: '#FFF', fontSize: 20, fontWeight: '800', letterSpacing: 1 },
   listContainer: { flex: 1, backgroundColor: '#F5F5F5' },
   listHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#E5E5E5' },
   listTitle: { fontSize: 20, fontWeight: 'bold', color: '#333' },
